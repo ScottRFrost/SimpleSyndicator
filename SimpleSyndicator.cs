@@ -74,11 +74,31 @@ namespace SimpleSyndicator
                     Console.WriteLine(content.Description + " " + content.LinkURL);
                     Console.WriteLine(content.ImageURL);
 
+                    // Save to config
+                    config.SyndicatedURLs.Add
+                    (
+                        new SyndicatedURL
+                        {
+                            Syndicated = DateTime.Now,
+                            URL = content.LinkURL
+                        }
+                    );
+
                     // Get image data to stream and move it into a byte array
-                    var downloadStream = httpClient.DownloadData(content.ImageURL).Result;
+                    System.IO.Stream downloadStream;
                     var imageStream = new MemoryStream();
-                    downloadStream.CopyTo(imageStream);
-                    var imageBytes = imageStream.ToArray();
+                    byte[] imageBytes = null;
+                    try
+                    {
+                        downloadStream = await httpClient.DownloadData(content.ImageURL).ConfigureAwait(false);
+                        downloadStream.CopyTo(imageStream);
+                        imageBytes = imageStream.ToArray();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Error while downloading - " + ex.ToString());
+                        continue;
+                    }
 
                     // Send to each syndication output
 
@@ -142,18 +162,8 @@ namespace SimpleSyndicator
                     }
                     catch(Exception ex)
                     {
-                        Console.WriteLine(ex.ToString());
+                        Console.WriteLine("Error while posting to twitter - " + ex.ToString());
                     }
-
-                    // Save to config
-                    config.SyndicatedURLs.Add
-                    (
-                        new SyndicatedURL
-                        {
-                            Syndicated = DateTime.Now,
-                            URL = content.LinkURL
-                        }
-                    );
                 }
             }
 
