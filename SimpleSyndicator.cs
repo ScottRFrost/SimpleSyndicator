@@ -9,6 +9,7 @@ using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using Tweetinvi;
+using Tweetinvi.Auth;
 using Tweetinvi.Models;
 using Tweetinvi.Parameters;
 using static SimpleSyndicator.BaseSource;
@@ -29,9 +30,9 @@ namespace SimpleSyndicator
             var foundContent = new List<SyndicatorContent>();
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
 
-            // Authentication
-            Auth.SetUserCredentials(config.TwitterConsumerKey, config.TwitterConsumerSecret, config.TwitterAccessToken, config.TwitterTokenSecret);
-            var twitterUser = User.GetAuthenticatedUser();
+            // Twitter Authentication
+            var twitter = new TwitterClient(config.TwitterConsumerKey, config.TwitterConsumerSecret, config.TwitterAccessToken, config.TwitterTokenSecret);
+            var twitterUser = await twitter.Users.GetAuthenticatedUserAsync().ConfigureAwait(false);
 
             // Parse Reddit Sources
             var redditSource = new RedditSource();
@@ -149,15 +150,11 @@ namespace SimpleSyndicator
                             }
                         }
 
-                        var publishedTweet = Auth.ExecuteOperationWithCredentials(twitterUser.Credentials, () =>
+                        var uploadedImage = await twitter.Upload.UploadTweetImageAsync(imageBytes).ConfigureAwait(false);
+                        var tweetWithImage = await twitter.Tweets.PublishTweetAsync(new PublishTweetParameters(content.Description + " " + content.LinkURL)
                         {
-                            var uploadedImage = Upload.UploadBinary(imageBytes);
-                            var publishOptions = new PublishTweetOptionalParameters
-                            {
-                                Medias = new List<IMedia>() { uploadedImage }
-                            };
-
-                            return Tweet.PublishTweet(content.Description + " " + content.LinkURL, publishOptions);
+                            Medias = { uploadedImage },
+                            PossiblySensitive = true
                         });
                     }
                     catch(Exception ex)
