@@ -13,8 +13,7 @@ namespace SimpleSyndicator
                 try
                 {
                     Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " MAIN LOOP STARTING...");
-                    var simpleSyndicator = new SimpleSyndicator();
-                    simpleSyndicator.Start().Wait();
+                    SimpleSyndicator.Start().Wait();
                     Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " MAIN LOOP CLEAN EXIT");
                 }
                 catch (Exception ex)

@@ -1,7 +1,8 @@
-﻿using Microsoft.Toolkit.Parsers.Rss;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.ServiceModel.Syndication;
+using System.Xml;
 
 namespace SimpleSyndicator
 {
@@ -11,62 +12,40 @@ namespace SimpleSyndicator
         {
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " -=[ Start RedditSource ]=-");
             var httpClient = new SimpleHttpClient();
-            var rssString = await httpClient.DownloadString(Url);
-            var rssParser = new RssParser();
+            using var xmlReader = XmlReader.Create(Url);
+            var rss = SyndicationFeed.Load(xmlReader);
             var syndicatorContents = new List<SyndicatorContent>();
-            foreach (var item in rssParser.Parse(rssString))
+            foreach (var rssItem in rss.Items)
             {
-                /* DEBUG
-                Console.WriteLine("Author:" + item.Author);
-                Console.WriteLine("Categories:" + item.Categories);
-                Console.WriteLine("Content:" + item.Content);
-                Console.WriteLine("ExtraImageUrl:" + item.ExtraImageUrl);
-                Console.WriteLine("FeedUrl:" + item.FeedUrl);
-                Console.WriteLine("ImageUrl:" + item.ImageUrl);
-                Console.WriteLine("MediaUrl:" + item.MediaUrl);
-                Console.WriteLine("PublishDate:" + item.PublishDate);
-                Console.WriteLine("Summary:" + item.Summary);
-                Console.WriteLine("Title:" + item.Title);
-                Console.WriteLine("----");
-                */
+                if (rssItem.Content is not TextSyndicationContent)
+                {
+                    continue;
+                }
+
+                var content = ((TextSyndicationContent)rssItem.Content).Text;
                 var syndicatorContent = new SyndicatorContent
                 {
-                    Description = (item.Title + " " + Tags).Trim(),
-                    LinkURL = item.FeedUrl,
+                    Description = (rssItem.Title.Text + " " + Tags).Trim(),
+                    LinkURL = rssItem.Links[0].Uri.ToString(),
                     ImageURL = string.Empty
                 };
 
                 // Find image URL via [link] in Content
-                if (item.Content.Contains(">[link]<"))
+                if (content.Contains(">[link]<"))
                 {
-                    var imageURL = item.Content.Substring(0, item.Content.IndexOf(">[link]<") - 1);
-                    imageURL = imageURL.Substring(imageURL.LastIndexOf("\"") + 1);
+                    var imageURL = content[..(content.IndexOf(">[link]<") - 1)];
+                    imageURL = imageURL[(imageURL.LastIndexOf("\"") + 1)..];
                     if(imageURL.EndsWith(".jpg", StringComparison.InvariantCultureIgnoreCase) || imageURL.EndsWith(".png", StringComparison.InvariantCultureIgnoreCase))
                     {
                         syndicatorContent.ImageURL = imageURL;
                     }
                 }
-                ////else if(item.Content.Contains("<a href=\"https://i.redd.it/"))
-                ////{
-                ////    syndicatorContent.ImageURL = item.Content.Substring(item.Content.IndexOf("<a href=\"https://i.redd.it/")).Replace("<a href=\"","");
-                ////    syndicatorContent.ImageURL = syndicatorContent.ImageURL.Substring(0, syndicatorContent.ImageURL.IndexOf("\""));
-                ////}
-                ////else if (item.Content.Contains("<a href=\"https://i.imgur.com/"))
-                ////{
-                ////    syndicatorContent.ImageURL = item.Content.Substring(item.Content.IndexOf("<a href=\"https://i.imgur.com/")).Replace("<a href=\"", "");
-                ////    syndicatorContent.ImageURL = syndicatorContent.ImageURL.Substring(0, syndicatorContent.ImageURL.IndexOf("\""));
-                ////}
-                ////else if (item.Content.Contains("<a href=\"https://static1.e621.net/"))
-                ////{
-                ////    syndicatorContent.ImageURL = item.Content.Substring(item.Content.IndexOf("<a href=\"https://static1.e621.net/")).Replace("<a href=\"", "");
-                ////    syndicatorContent.ImageURL = syndicatorContent.ImageURL.Substring(0, syndicatorContent.ImageURL.IndexOf("\""));
-                ////}
 
                 // Shorten URL
                 if (syndicatorContent.LinkURL.Contains("/comments/"))
                 {
-                    syndicatorContent.LinkURL =  syndicatorContent.LinkURL.Substring(syndicatorContent.LinkURL.IndexOf("/comments/") + 10);
-                    syndicatorContent.LinkURL = "https://redd.it/" + syndicatorContent.LinkURL.Substring(0 , syndicatorContent.LinkURL.IndexOf("/"));
+                    syndicatorContent.LinkURL =  syndicatorContent.LinkURL[(syndicatorContent.LinkURL.IndexOf("/comments/") + 10)..];
+                    syndicatorContent.LinkURL = string.Concat("https://redd.it/", syndicatorContent.LinkURL.AsSpan(0 , syndicatorContent.LinkURL.IndexOf("/")));
                 }
 
                 // If we found an image, return this item

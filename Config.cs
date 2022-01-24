@@ -11,10 +11,10 @@ namespace SimpleSyndicator
         // Telegram
         public string TelegramKey;
         public List<long> TelegramChannelIDs;
-        
+
         ////public string DiscordToken;
         ////public List<long> DiscordChannelIDs;
-        
+
         public List<string> IFTTTWebHooks; // https://maker.ifttt.com/trigger/{Trigger}/with/key/{YourKeyHere}, Text is sent as value1 and image is sent as value2 and will be added automatically
 
         // Twitter

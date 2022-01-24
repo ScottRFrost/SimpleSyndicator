@@ -8,7 +8,6 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Telegram.Bot;
-using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Tweetinvi;
 using Tweetinvi.Parameters;
@@ -16,9 +15,9 @@ using static SimpleSyndicator.BaseSource;
 
 namespace SimpleSyndicator
 {
-    class SimpleSyndicator
+    static class SimpleSyndicator
     {
-        public async Task<bool> Start()
+        public static async Task<bool> Start()
         {
             // Read Config
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Reading config...");
