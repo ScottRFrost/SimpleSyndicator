@@ -11,6 +11,7 @@ namespace SimpleSyndicator
             public string Description;
             public string LinkURL;
             public string ImageURL;
+            public string Tags;
         }
     }
 }

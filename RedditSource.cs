@@ -11,7 +11,6 @@ namespace SimpleSyndicator
         public override async Task<SyndicatorContent[]> Parse(string Url, string Tags)
         {
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " -=[ Start RedditSource ]=-");
-            var httpClient = new SimpleHttpClient();
             using var xmlReader = XmlReader.Create(Url);
             var rss = SyndicationFeed.Load(xmlReader);
             var syndicatorContents = new List<SyndicatorContent>();
@@ -25,9 +24,10 @@ namespace SimpleSyndicator
                 var content = ((TextSyndicationContent)rssItem.Content).Text;
                 var syndicatorContent = new SyndicatorContent
                 {
-                    Description = (rssItem.Title.Text + " " + Tags).Trim(),
+                    Description = rssItem.Title.Text.Trim(),
                     LinkURL = rssItem.Links[0].Uri.ToString(),
-                    ImageURL = string.Empty
+                    ImageURL = string.Empty,
+                    Tags = Tags
                 };
 
                 // Find image URL via [link] in Content

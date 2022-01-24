@@ -107,7 +107,7 @@ namespace SimpleSyndicator
 
                         // Send to each syndication output
 
-                        // Telegram
+                        // Telegram (Don't send tags along with it, because we don't need search)
                         try
                         {
                             foreach(var channel in config.TelegramChannelIDs)
@@ -126,10 +126,10 @@ namespace SimpleSyndicator
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine("Error while posting to twitter - " + ex.ToString());
+                            Console.WriteLine("Error while posting to Telegram - " + ex.ToString());
                         }
 
-                        // Twitter
+                        // Twitter (send with tags)
                         try
                         {
                             // Twitter doesn't allow images over 5MB to be uploaded via API
@@ -163,7 +163,7 @@ namespace SimpleSyndicator
                             }
 
                             var uploadedImage = await twitter.Upload.UploadTweetImageAsync(imageBytes).ConfigureAwait(false);
-                            var tweetWithImage = await twitter.Tweets.PublishTweetAsync(new PublishTweetParameters(content.Description + " " + content.LinkURL)
+                            var tweetWithImage = await twitter.Tweets.PublishTweetAsync(new PublishTweetParameters(string.Concat(content.Description," ", content.Tags, " ", content.LinkURL))
                             {
                                 Medias = { uploadedImage },
                                 PossiblySensitive = true
@@ -171,7 +171,7 @@ namespace SimpleSyndicator
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine("Error while posting to twitter - " + ex.ToString());
+                            Console.WriteLine("Error while posting to Twitter - " + ex.ToString());
                         }
                     }
                 }
