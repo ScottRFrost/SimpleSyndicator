@@ -29,9 +29,27 @@ namespace SimpleSyndicator
             var foundContent = new List<SyndicatorContent>();
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
 
-            // Twitter Authentication
-            var twitter = new TwitterClient(config.TwitterConsumerKey, config.TwitterConsumerSecret, config.TwitterAccessToken, config.TwitterTokenSecret);
-            var twitterUser = await twitter.Users.GetAuthenticatedUserAsync().ConfigureAwait(false);
+            // Twitter Setup
+            TwitterClient twitter = null;
+            Tweetinvi.Models.IAuthenticatedUser twitterUser = null;
+            var useTwitter = false;
+            if(config.TwitterConsumerKey.Length > 0)
+            {
+                useTwitter = true;
+            }
+            if (useTwitter)
+            {
+                twitter = new TwitterClient(config.TwitterConsumerKey, config.TwitterConsumerSecret, config.TwitterAccessToken, config.TwitterTokenSecret);
+                twitterUser = await twitter.Users.GetAuthenticatedUserAsync().ConfigureAwait(false);
+            }
+
+            // Telegram Setup
+            var useTelegram = false;
+            if(config.TelegramKey.Length > 0)
+            {
+                useTelegram = true;
+            }
+            TelegramBotClient telegram = null;
 
             // Parse Reddit Sources
             var redditSource = new RedditSource();
@@ -55,13 +73,15 @@ namespace SimpleSyndicator
 
             // Check content to see if it's been syndicated before, then syndicate it if it hasn't
             Console.WriteLine();
-
             if(foundContent.Count > 0)
             {
                 Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + "-=[ " + foundContent.Count.ToString() + " Results ]=-");
 
                 using var httpClient = new SimpleHttpClient();
-                var telegram = new TelegramBotClient(config.TelegramKey);
+                if (useTelegram)
+                {
+                    telegram = new TelegramBotClient(config.TelegramKey);
+                }
                 foreach (var content in foundContent)
                 {
                     var previouslySyndicated = false;
@@ -108,70 +128,76 @@ namespace SimpleSyndicator
                         // Send to each syndication output
 
                         // Telegram (Don't send tags along with it, because we don't need search)
-                        try
+                        if (useTelegram)
                         {
-                            foreach(var channel in config.TelegramChannelIDs)
+                            try
                             {
-                                _ = telegram.SendChatActionAsync(channel, ChatAction.Typing);
-                                imageStream.Seek(0, SeekOrigin.Begin);
-                                if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
+                                foreach (var channel in config.TelegramChannelIDs)
                                 {
-                                    await telegram.SendAnimationAsync(channel, imageStream, null, null, null, null, content.Description + " " + content.LinkURL);
-                                }
-                                else
-                                {
-                                    await telegram.SendPhotoAsync(channel, imageStream, content.Description + " " + content.LinkURL);
+                                    _ = telegram.SendChatActionAsync(channel, ChatAction.Typing);
+                                    imageStream.Seek(0, SeekOrigin.Begin);
+                                    if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
+                                    {
+                                        await telegram.SendAnimationAsync(channel, imageStream, null, null, null, null, content.Description + " " + content.LinkURL);
+                                    }
+                                    else
+                                    {
+                                        await telegram.SendPhotoAsync(channel, imageStream, content.Description + " " + content.LinkURL);
+                                    }
                                 }
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine("Error while posting to Telegram - " + ex.ToString());
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine("Error while posting to Telegram - " + ex.ToString());
+                            }
                         }
 
                         // Twitter (send with tags)
-                        try
+                        if (useTwitter)
                         {
-                            // Twitter doesn't allow images over 5MB to be uploaded via API
-                            if (imageBytes.Length > 5000000)
+                            try
                             {
-                                var originalImage = Image.FromStream(imageStream);
-                                using var newImage = new Bitmap(originalImage.Width, originalImage.Height);
-                                using var graphics = Graphics.FromImage(originalImage);
-                                graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                                graphics.DrawImage(originalImage, new Rectangle(0, 0, originalImage.Width, originalImage.Height));
-
-                                // Keep trying compression quality settings until we get to where we need to be
-                                var over5MB = true;
-                                var quality = 90L;
-                                while (over5MB)
+                                // Twitter doesn't allow images over 5MB to be uploaded via API
+                                if (imageBytes.Length > 5000000)
                                 {
-                                    var encoder = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
-                                    var encParams = new EncoderParameters() { Param = new[] { new EncoderParameter(Encoder.Quality, quality) } };
-                                    var resampleStream = new MemoryStream();
-                                    newImage.Save(resampleStream, encoder, encParams);
-                                    if (resampleStream.Length <= 5000000)
-                                    {
-                                        over5MB = false;
-                                        imageBytes = resampleStream.ToArray();
-                                    }
-                                    quality -= 5L;
-                                    resampleStream.Dispose();
-                                }
-                            }
+                                    var originalImage = Image.FromStream(imageStream);
+                                    using var newImage = new Bitmap(originalImage.Width, originalImage.Height);
+                                    using var graphics = Graphics.FromImage(originalImage);
+                                    graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                                    graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                    graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                    graphics.DrawImage(originalImage, new Rectangle(0, 0, originalImage.Width, originalImage.Height));
 
-                            var uploadedImage = await twitter.Upload.UploadTweetImageAsync(imageBytes).ConfigureAwait(false);
-                            var tweetWithImage = await twitter.Tweets.PublishTweetAsync(new PublishTweetParameters(string.Concat(content.Description," ", content.Tags, " ", content.LinkURL))
+                                    // Keep trying compression quality settings until we get to where we need to be
+                                    var over5MB = true;
+                                    var quality = 90L;
+                                    while (over5MB)
+                                    {
+                                        var encoder = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
+                                        var encParams = new EncoderParameters() { Param = new[] { new EncoderParameter(Encoder.Quality, quality) } };
+                                        var resampleStream = new MemoryStream();
+                                        newImage.Save(resampleStream, encoder, encParams);
+                                        if (resampleStream.Length <= 5000000)
+                                        {
+                                            over5MB = false;
+                                            imageBytes = resampleStream.ToArray();
+                                        }
+                                        quality -= 5L;
+                                        resampleStream.Dispose();
+                                    }
+                                }
+
+                                var uploadedImage = await twitter.Upload.UploadTweetImageAsync(imageBytes).ConfigureAwait(false);
+                                var tweetWithImage = await twitter.Tweets.PublishTweetAsync(new PublishTweetParameters(string.Concat(content.Description, " ", content.Tags, " ", content.LinkURL))
+                                {
+                                    Medias = { uploadedImage },
+                                    PossiblySensitive = true
+                                });
+                            }
+                            catch (Exception ex)
                             {
-                                Medias = { uploadedImage },
-                                PossiblySensitive = true
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine("Error while posting to Twitter - " + ex.ToString());
+                                Console.WriteLine("Error while posting to Twitter - " + ex.ToString());
+                            }
                         }
                     }
                 }
