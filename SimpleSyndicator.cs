@@ -1,16 +1,10 @@
 ﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
 using Telegram.Bot;
 using Telegram.Bot.Types.Enums;
-using Tweetinvi;
-using Tweetinvi.Parameters;
 using static SimpleSyndicator.BaseSource;
 
 namespace SimpleSyndicator
@@ -28,20 +22,6 @@ namespace SimpleSyndicator
             }
             var foundContent = new List<SyndicatorContent>();
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
-
-            // Twitter Setup
-            TwitterClient twitter = null;
-            Tweetinvi.Models.IAuthenticatedUser twitterUser = null;
-            var useTwitter = false;
-            if(config.TwitterConsumerKey.Length > 0)
-            {
-                useTwitter = true;
-            }
-            if (useTwitter)
-            {
-                twitter = new TwitterClient(config.TwitterConsumerKey, config.TwitterConsumerSecret, config.TwitterAccessToken, config.TwitterTokenSecret);
-                twitterUser = await twitter.Users.GetAuthenticatedUserAsync().ConfigureAwait(false);
-            }
 
             // Telegram Setup
             var useTelegram = false;
@@ -149,54 +129,6 @@ namespace SimpleSyndicator
                             catch (Exception ex)
                             {
                                 Console.WriteLine("Error while posting to Telegram - " + ex.ToString());
-                            }
-                        }
-
-                        // Twitter (send with tags)
-                        if (useTwitter)
-                        {
-                            try
-                            {
-                                // Twitter doesn't allow images over 5MB to be uploaded via API
-                                if (imageBytes.Length > 5000000)
-                                {
-                                    var originalImage = Image.FromStream(imageStream);
-                                    using var newImage = new Bitmap(originalImage.Width, originalImage.Height);
-                                    using var graphics = Graphics.FromImage(originalImage);
-                                    graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                                    graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                                    graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                                    graphics.DrawImage(originalImage, new Rectangle(0, 0, originalImage.Width, originalImage.Height));
-
-                                    // Keep trying compression quality settings until we get to where we need to be
-                                    var over5MB = true;
-                                    var quality = 90L;
-                                    while (over5MB)
-                                    {
-                                        var encoder = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
-                                        var encParams = new EncoderParameters() { Param = new[] { new EncoderParameter(Encoder.Quality, quality) } };
-                                        var resampleStream = new MemoryStream();
-                                        newImage.Save(resampleStream, encoder, encParams);
-                                        if (resampleStream.Length <= 5000000)
-                                        {
-                                            over5MB = false;
-                                            imageBytes = resampleStream.ToArray();
-                                        }
-                                        quality -= 5L;
-                                        resampleStream.Dispose();
-                                    }
-                                }
-
-                                var uploadedImage = await twitter.Upload.UploadTweetImageAsync(imageBytes).ConfigureAwait(false);
-                                var tweetWithImage = await twitter.Tweets.PublishTweetAsync(new PublishTweetParameters(string.Concat(content.Description, " ", content.Tags, " ", content.LinkURL))
-                                {
-                                    Medias = { uploadedImage },
-                                    PossiblySensitive = true
-                                });
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine("Error while posting to Twitter - " + ex.ToString());
                             }
                         }
                     }
