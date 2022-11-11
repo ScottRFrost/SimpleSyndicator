@@ -1,8 +1,9 @@
-﻿using Newtonsoft.Json;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Telegram.Bot;
 using Telegram.Bot.Types.Enums;
 using static SimpleSyndicator.BaseSource;
@@ -15,11 +16,8 @@ namespace SimpleSyndicator
         {
             // Read Config
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Reading config...");
-            var config = JsonConvert.DeserializeObject<Config>(System.IO.File.ReadAllText("config.json"));
-            if (config.SyndicatedURLs == null)
-            {
-                config.SyndicatedURLs = new List<SyndicatedURL>();
-            }
+            var config = JsonSerializer.Deserialize<Config>(File.ReadAllText("config.json"));
+            config.SyndicatedURLs ??= new List<SyndicatedURL>();
             var foundContent = new List<SyndicatorContent>();
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
 
@@ -146,7 +144,7 @@ namespace SimpleSyndicator
             }
 
             // Save Config
-            System.IO.File.WriteAllText("config.json", JsonConvert.SerializeObject(config, Formatting.Indented), System.Text.Encoding.UTF8);
+            File.WriteAllText("config.json", JsonSerializer.Serialize(config,new JsonSerializerOptions { WriteIndented = true }), System.Text.Encoding.UTF8);
 
             return true;
         }

@@ -17,11 +17,6 @@ namespace SimpleSyndicator
 
         public List<string> IFTTTWebHooks; // https://maker.ifttt.com/trigger/{Trigger}/with/key/{YourKeyHere}, Text is sent as value1 and image is sent as value2 and will be added automatically
 
-        // Twitter
-        public string TwitterConsumerKey;
-        public string TwitterConsumerSecret;
-        public string TwitterAccessToken;
-        public string TwitterTokenSecret;
 
         // Content that's already been syndicated (to prevent duplication)
         public List<SyndicatedURL> SyndicatedURLs;
