@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.ServiceModel.Syndication;
 using System.Xml;
+using System.IO;
 
 namespace SimpleSyndicator
 {
@@ -11,7 +12,9 @@ namespace SimpleSyndicator
         public override async Task<SyndicatorContent[]> Parse(string Url, string Tags)
         {
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " -=[ Start RedditSource ]=-");
-            using var xmlReader = XmlReader.Create(Url);
+            using var http = new SimpleHttpClient();
+            var xml = await http.DownloadStringAsync(Url).ConfigureAwait(false);
+            using var xmlReader = XmlReader.Create(new StringReader(xml));
             var rss = SyndicationFeed.Load(xmlReader);
             var syndicatorContents = new List<SyndicatorContent>();
             foreach (var rssItem in rss.Items)

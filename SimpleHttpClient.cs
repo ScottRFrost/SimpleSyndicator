@@ -13,12 +13,19 @@ namespace SimpleSyndicator
             Timeout = new TimeSpan(0, 0, 30);
             ReferrerUri = "https://duckduckgo.com";
             AuthorizationHeader = string.Empty;
-            DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
-            DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.5");
-            DefaultRequestHeaders.TryAddWithoutValidation("Connection", "keep-alive");
+            DefaultRequestHeaders.TryAddWithoutValidation("ACCEPT", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+            DefaultRequestHeaders.TryAddWithoutValidation("ACCEPT-ENCODING", "gzip, deflate");
+            DefaultRequestHeaders.TryAddWithoutValidation("ACCEPT-LANGUAGE", "en-US,en;q=0.5");
+            DefaultRequestHeaders.TryAddWithoutValidation("CONNECTION", "keep-alive");
             DefaultRequestHeaders.TryAddWithoutValidation("DNT", "1");
+            DefaultRequestHeaders.TryAddWithoutValidation("SEC-FETCH-DEST", "document");
+            DefaultRequestHeaders.TryAddWithoutValidation("SEC-FETCH-MODE", "navigate");
+            DefaultRequestHeaders.TryAddWithoutValidation("SEC-FETCH-SITE", "none");
+            DefaultRequestHeaders.TryAddWithoutValidation("SEC-FETCH-USER", "?1");
+            DefaultRequestHeaders.TryAddWithoutValidation("SEC-GPC", "1");
+            DefaultRequestHeaders.TryAddWithoutValidation("TE", "trailers");
             DefaultRequestHeaders.TryAddWithoutValidation("UPGRADE-INSECURE-REQUESTS", "1");
-            DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:69.0) Gecko/20100101 Firefox/69.0");
+            DefaultRequestHeaders.TryAddWithoutValidation("USER-AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0");
             CustomHeaders = new Dictionary<string, string>();
         }
 
@@ -36,7 +43,7 @@ namespace SimpleSyndicator
             DefaultRequestHeaders.TryAddWithoutValidation(name, value);
         }
 
-        public async Task<string> DownloadString(string uri)
+        public async Task<string> DownloadStringAsync(string uri)
         {
             BuildHeaders();
             try

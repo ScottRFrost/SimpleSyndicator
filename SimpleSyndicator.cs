@@ -16,7 +16,8 @@ namespace SimpleSyndicator
         {
             // Read Config
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Reading config...");
-            var config = JsonSerializer.Deserialize<Config>(File.ReadAllText("config.json"));
+            var json = File.ReadAllText(Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + "config.json");
+            var config = JsonSerializer.Deserialize<Config>(json);
             config.SyndicatedURLs ??= new List<SyndicatedURL>();
             var foundContent = new List<SyndicatorContent>();
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
@@ -114,13 +115,14 @@ namespace SimpleSyndicator
                                 {
                                     _ = telegram.SendChatActionAsync(channel, ChatAction.Typing);
                                     imageStream.Seek(0, SeekOrigin.Begin);
+                                    var file = Telegram.Bot.Types.InputFile.FromStream(imageStream);
                                     if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
                                     {
-                                        await telegram.SendAnimationAsync(channel, imageStream, null, null, null, null, content.Description + " " + content.LinkURL);
+                                        await telegram.SendAnimationAsync(channel, file, caption: content.Description + " " + content.LinkURL);
                                     }
                                     else
                                     {
-                                        await telegram.SendPhotoAsync(channel, imageStream, content.Description + " " + content.LinkURL);
+                                        await telegram.SendPhotoAsync(channel, file, caption: content.Description + " " + content.LinkURL);
                                     }
                                 }
                             }

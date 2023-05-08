@@ -1,37 +1,33 @@
 ﻿using System;
 using System.Collections.Generic;
 
+#pragma warning disable CS0649 // Field 'Config.Sources' is never assigned to, and will always have its default value null
 namespace SimpleSyndicator
 {
-    class Config
+    public class Config
     {
-        // Sources
-        public List<Source> Sources; // RSS URLs for Reddit
-
-        // Telegram
-        public string TelegramKey;
-        public List<long> TelegramChannelIDs;
-
-        ////public string DiscordToken;
-        ////public List<long> DiscordChannelIDs;
-
-        public List<string> IFTTTWebHooks; // https://maker.ifttt.com/trigger/{Trigger}/with/key/{YourKeyHere}, Text is sent as value1 and image is sent as value2 and will be added automatically
-
-
-        // Content that's already been syndicated (to prevent duplication)
-        public List<SyndicatedURL> SyndicatedURLs;
+        public List<Source> Sources { get; set; }
+        public string TelegramKey { get; set; }
+        public long[] TelegramChannelIDs { get; set; }
+        public string[] IFTTTWebHooks { get; set; }
+        public string TwitterConsumerKey { get; set; }
+        public string TwitterConsumerSecret { get; set; }
+        public string TwitterAccessToken { get; set; }
+        public string TwitterTokenSecret { get; set; }
+        public List<SyndicatedURL> SyndicatedURLs { get; set; }
     }
 
-    struct Source
+    public class Source
     {
-        public string Type;
-        public string URL;
-        public string Tags;
+        public string Type { get; set; }
+        public string URL { get; set; }
+        public string Tags { get; set; }
     }
 
-    struct SyndicatedURL
+    public class SyndicatedURL
     {
-        public DateTime Syndicated;
-        public string URL;
+        public DateTime Syndicated { get; set; }
+        public string URL { get; set; }
     }
 }
+#pragma warning restore CS0649 // Field 'Config.Sources' is never assigned to, and will always have its default value null
