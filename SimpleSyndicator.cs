@@ -66,10 +66,11 @@ namespace SimpleSyndicator
                     var previouslySyndicated = false;
                     foreach (var syndicatedURL in config.SyndicatedURLs)
                     {
-                        if (syndicatedURL.URL == content.LinkURL)
+                        // If the URL or description is an exact match, don't syndicate it again
+                        if (syndicatedURL.URL == content.LinkURL || (syndicatedURL.Description != null && syndicatedURL.Description == content.Description))
                         {
                             previouslySyndicated = true;
-                            continue;
+                            break;
                         }
                     }
                     if (!previouslySyndicated)
@@ -84,7 +85,8 @@ namespace SimpleSyndicator
                             new SyndicatedURL
                             {
                                 Syndicated = DateTime.Now,
-                                URL = content.LinkURL
+                                URL = content.LinkURL,
+                                Description = content.Description
                             }
                         );
 

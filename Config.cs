@@ -28,6 +28,7 @@ namespace SimpleSyndicator
     {
         public DateTime Syndicated { get; set; }
         public string URL { get; set; }
+        public string Description { get; set; }
     }
 }
 #pragma warning restore CS0649 // Field 'Config.Sources' is never assigned to, and will always have its default value null
