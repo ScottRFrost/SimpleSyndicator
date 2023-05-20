@@ -90,21 +90,21 @@ namespace SimpleSyndicator
                             }
                         );
 
-                        // Get image data to stream and move it into a byte array
-                        Stream downloadStream;
-                        var imageStream = new MemoryStream();
-                        byte[] imageBytes = null;
-                        try
-                        {
-                            downloadStream = await httpClient.DownloadData(content.ImageURL).ConfigureAwait(false);
-                            downloadStream.CopyTo(imageStream);
-                            imageBytes = imageStream.ToArray();
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine("Error while downloading - " + ex.ToString());
-                            continue;
-                        }
+                        ////// Get image data to stream and move it into a byte array
+                        ////Stream downloadStream;
+                        ////var imageStream = new MemoryStream();
+                        ////byte[] imageBytes = null;
+                        ////try
+                        ////{
+                        ////    downloadStream = await httpClient.DownloadData(content.ImageURL).ConfigureAwait(false);
+                        ////    downloadStream.CopyTo(imageStream);
+                        ////    imageBytes = imageStream.ToArray();
+                        ////}
+                        ////catch (Exception ex)
+                        ////{
+                        ////    Console.WriteLine("Error while downloading - " + ex.ToString());
+                        ////    continue;
+                        ////}
 
                         // Send to each syndication output
 
@@ -116,8 +116,9 @@ namespace SimpleSyndicator
                                 foreach (var channel in config.TelegramChannelIDs)
                                 {
                                     _ = telegram.SendChatActionAsync(channel, ChatAction.Typing);
-                                    imageStream.Seek(0, SeekOrigin.Begin);
-                                    var file = Telegram.Bot.Types.InputFile.FromStream(imageStream);
+                                    //// imageStream.Seek(0, SeekOrigin.Begin);
+                                    //// var file = Telegram.Bot.Types.InputFile.FromStream(imageStream);
+                                    var file = Telegram.Bot.Types.InputFile.FromUri(content.ImageURL);
                                     if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
                                     {
                                         await telegram.SendAnimationAsync(channel, file, caption: content.Description + " " + content.LinkURL);
