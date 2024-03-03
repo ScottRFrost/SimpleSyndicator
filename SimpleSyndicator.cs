@@ -1,11 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.IO;
-using System.Threading.Tasks;
+using System.Net.Http;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using Telegram.Bot;
+using System.Threading.Tasks;
+using System;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot;
 using static SimpleSyndicator.BaseSource;
 
 namespace SimpleSyndicator
@@ -18,7 +18,7 @@ namespace SimpleSyndicator
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Reading config...");
             var json = File.ReadAllText(Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + "config.json");
             var config = JsonSerializer.Deserialize<Config>(json);
-            config.SyndicatedURLs ??= new List<SyndicatedURL>();
+            config.SyndicatedURLs ??= [];
             var foundContent = new List<SyndicatorContent>();
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
 
@@ -46,7 +46,7 @@ namespace SimpleSyndicator
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Error on " + source.Type + " - " + source.URL + "\r\n" + ex.ToString());
+                    Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Error on " + source.Type + " - " + source.URL + "\r\n" + ex);
                 }
             }
 
@@ -55,8 +55,11 @@ namespace SimpleSyndicator
             if(foundContent.Count > 0)
             {
                 Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + "-=[ " + foundContent.Count.ToString() + " Results ]=-");
-
-                using var httpClient = new SimpleHttpClient();
+                var handler = new HttpClientHandler()
+                {
+                    ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                };
+                using var http = new SimpleHttpClient(handler);
                 if (useTelegram)
                 {
                     telegram = new TelegramBotClient(config.TelegramKey);
@@ -90,21 +93,26 @@ namespace SimpleSyndicator
                             }
                         );
 
-                        ////// Get image data to stream and move it into a byte array
-                        ////Stream downloadStream;
-                        ////var imageStream = new MemoryStream();
-                        ////byte[] imageBytes = null;
-                        ////try
-                        ////{
-                        ////    downloadStream = await httpClient.DownloadData(content.ImageURL).ConfigureAwait(false);
-                        ////    downloadStream.CopyTo(imageStream);
-                        ////    imageBytes = imageStream.ToArray();
-                        ////}
-                        ////catch (Exception ex)
-                        ////{
-                        ////    Console.WriteLine("Error while downloading - " + ex.ToString());
-                        ////    continue;
-                        ////}
+                        // Get image data to stream and move it into a byte array
+                        var imageStream = new MemoryStream();
+                        //// byte[] imageBytes = null;
+                        try
+                        {
+                            // Reddit has some annoying anti-downloader crap, change the Accept header to bypass it
+                            if (content.ImageURL.Contains("i.redd.it"))
+                            {
+                                http.DefaultRequestHeaders.Accept.Clear();
+                                http.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("*/*"));
+                            }
+                            await using var downloadStream = await http.DownloadData(content.ImageURL).ConfigureAwait(false);
+                            await downloadStream.CopyToAsync(imageStream).ConfigureAwait(false);
+                            //// imageBytes = imageStream.ToArray();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine("Error while downloading - " + ex);
+                            continue;
+                        }
 
                         // Send to each syndication output
 
@@ -116,9 +124,9 @@ namespace SimpleSyndicator
                                 foreach (var channel in config.TelegramChannelIDs)
                                 {
                                     _ = telegram.SendChatActionAsync(channel, ChatAction.Typing);
-                                    //// imageStream.Seek(0, SeekOrigin.Begin);
-                                    //// var file = Telegram.Bot.Types.InputFile.FromStream(imageStream);
-                                    var file = Telegram.Bot.Types.InputFile.FromUri(content.ImageURL);
+                                    imageStream.Seek(0, SeekOrigin.Begin);
+                                    var file = Telegram.Bot.Types.InputFile.FromStream(imageStream);
+                                    ////var file = Telegram.Bot.Types.InputFile.FromUri(content.ImageURL);
                                     if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
                                     {
                                         await telegram.SendAnimationAsync(channel, file, caption: content.Description + " " + content.LinkURL);
@@ -131,7 +139,7 @@ namespace SimpleSyndicator
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine("Error while posting to Telegram - " + ex.ToString());
+                                Console.WriteLine("Error while posting to Telegram - " + ex);
                             }
                         }
                     }
@@ -149,7 +157,7 @@ namespace SimpleSyndicator
             }
 
             // Save Config
-            File.WriteAllText("config.json", JsonSerializer.Serialize(config,new JsonSerializerOptions { WriteIndented = true }), System.Text.Encoding.UTF8);
+            File.WriteAllText("config.json", JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }), System.Text.Encoding.UTF8);
 
             return true;
         }

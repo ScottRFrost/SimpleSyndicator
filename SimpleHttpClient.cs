@@ -8,7 +8,7 @@ namespace SimpleSyndicator
 {
     public class SimpleHttpClient : HttpClient
     {
-        public SimpleHttpClient()
+        public SimpleHttpClient(HttpClientHandler handler) : base(handler)
         {
             Timeout = new TimeSpan(0, 0, 30);
             ReferrerUri = "https://duckduckgo.com";
@@ -25,8 +25,8 @@ namespace SimpleSyndicator
             DefaultRequestHeaders.TryAddWithoutValidation("SEC-GPC", "1");
             DefaultRequestHeaders.TryAddWithoutValidation("TE", "trailers");
             DefaultRequestHeaders.TryAddWithoutValidation("UPGRADE-INSECURE-REQUESTS", "1");
-            DefaultRequestHeaders.TryAddWithoutValidation("USER-AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0");
-            CustomHeaders = new Dictionary<string, string>();
+            DefaultRequestHeaders.TryAddWithoutValidation("USER-AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/124.0");
+            CustomHeaders = [];
         }
 
         public string AuthorizationHeader { get; set; }

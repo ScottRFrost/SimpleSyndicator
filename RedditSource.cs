@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using System.ServiceModel.Syndication;
 using System.Xml;
 using System.IO;
+using System.Net.Http;
 
 namespace SimpleSyndicator
 {
@@ -12,7 +13,11 @@ namespace SimpleSyndicator
         public override async Task<SyndicatorContent[]> Parse(string Url, string Tags)
         {
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " -=[ Start RedditSource ]=-");
-            using var http = new SimpleHttpClient();
+            var handler = new HttpClientHandler()
+            {
+                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+            using var http = new SimpleHttpClient(handler);
             var xml = await http.DownloadStringAsync(Url).ConfigureAwait(false);
             using var xmlReader = XmlReader.Create(new StringReader(xml));
             var rss = SyndicationFeed.Load(xmlReader);
@@ -37,7 +42,7 @@ namespace SimpleSyndicator
                 if (content.Contains(">[link]<"))
                 {
                     var imageURL = content[..(content.IndexOf(">[link]<") - 1)];
-                    imageURL = imageURL[(imageURL.LastIndexOf("\"") + 1)..];
+                    imageURL = imageURL[(imageURL.LastIndexOf('\"') + 1)..];
                     if(imageURL.EndsWith(".jpg", StringComparison.InvariantCultureIgnoreCase) || imageURL.EndsWith(".png", StringComparison.InvariantCultureIgnoreCase))
                     {
                         syndicatorContent.ImageURL = imageURL;
@@ -48,7 +53,7 @@ namespace SimpleSyndicator
                 if (syndicatorContent.LinkURL.Contains("/comments/"))
                 {
                     syndicatorContent.LinkURL =  syndicatorContent.LinkURL[(syndicatorContent.LinkURL.IndexOf("/comments/") + 10)..];
-                    syndicatorContent.LinkURL = string.Concat("https://redd.it/", syndicatorContent.LinkURL.AsSpan(0 , syndicatorContent.LinkURL.IndexOf("/")));
+                    syndicatorContent.LinkURL = $"https://redd.it/{syndicatorContent.LinkURL.AsSpan(0 , syndicatorContent.LinkURL.IndexOf('/'))}";
                 }
 
                 // If we found an image, return this item
@@ -60,7 +65,7 @@ namespace SimpleSyndicator
             }
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " -=[ End RedditSource ]=-");
             Console.WriteLine();
-            return syndicatorContents.ToArray();
+            return [.. syndicatorContents];
         }
     }
 }
