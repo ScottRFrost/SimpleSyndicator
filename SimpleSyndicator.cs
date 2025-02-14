@@ -8,158 +8,161 @@ using Telegram.Bot.Types.Enums;
 using Telegram.Bot;
 using static SimpleSyndicator.BaseSource;
 
-namespace SimpleSyndicator
+namespace SimpleSyndicator;
+
+static class SimpleSyndicator
 {
-    static class SimpleSyndicator
+    private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
+
+    public static async Task<bool> Start()
     {
-        public static async Task<bool> Start()
+        // Read Config
+        Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Reading config...");
+        var json = await File.ReadAllTextAsync(Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + "config.json").ConfigureAwait(false);
+        var config = JsonSerializer.Deserialize<Config>(json);
+        config.SyndicatedURLs ??= [];
+        var foundContent = new List<SyndicatorContent>();
+        Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
+
+        // Telegram Setup
+        var useTelegram = false;
+        if(config.TelegramKey.Length > 0)
         {
-            // Read Config
-            Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Reading config...");
-            var json = File.ReadAllText(Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + "config.json");
-            var config = JsonSerializer.Deserialize<Config>(json);
-            config.SyndicatedURLs ??= [];
-            var foundContent = new List<SyndicatorContent>();
-            Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
+            useTelegram = true;
+        }
+        TelegramBotClient telegram = null;
 
-            // Telegram Setup
-            var useTelegram = false;
-            if(config.TelegramKey.Length > 0)
+        // Parse Reddit Sources
+        var redditSource = new RedditSource();
+        foreach (var source in config.Sources)
+        {
+            Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Getting " + source.Type + " - " + source.URL);
+            try
             {
-                useTelegram = true;
-            }
-            TelegramBotClient telegram = null;
-
-            // Parse Reddit Sources
-            var redditSource = new RedditSource();
-            foreach (var source in config.Sources)
-            {
-                Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Getting " + source.Type + " - " + source.URL);
-                try
+                switch (source.Type.ToLowerInvariant())
                 {
-                    switch (source.Type.ToLowerInvariant())
+                    case "reddit":
+                        foundContent.AddRange(await redditSource.Parse(source.URL, source.Tags).ConfigureAwait(false));
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Error on " + source.Type + " - " + source.URL + "\r\n" + ex);
+            }
+        }
+
+        // Check content to see if it's been syndicated before, then syndicate it if it hasn't
+        Console.WriteLine();
+        if(foundContent.Count > 0)
+        {
+            Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + "-=[ " + foundContent.Count.ToString() + " Results ]=-");
+            #pragma warning disable S4830 // Server certificates should be verified during SSL/TLS connections
+            var handler = new HttpClientHandler()
+            {
+                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+            #pragma warning restore S4830 // Server certificates should be verified during SSL/TLS connections
+            using var http = new SimpleHttpClient(handler);
+            if (useTelegram)
+            {
+                telegram = new TelegramBotClient(config.TelegramKey);
+            }
+            foreach (var content in foundContent)
+            {
+                var previouslySyndicated = false;
+                foreach (var syndicatedURL in config.SyndicatedURLs)
+                {
+                    // If the URL or description is an exact match, don't syndicate it again
+                    if (syndicatedURL.URL == content.LinkURL || (syndicatedURL.Description != null && syndicatedURL.Description == content.Description))
                     {
-                        case "reddit":
-                            foundContent.AddRange(await redditSource.Parse(source.URL, source.Tags).ConfigureAwait(false));
-                            break;
+                        previouslySyndicated = true;
+                        break;
                     }
                 }
-                catch (Exception ex)
+                if (!previouslySyndicated)
                 {
-                    Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Error on " + source.Type + " - " + source.URL + "\r\n" + ex);
-                }
-            }
+                    // Write to Console
+                    Console.WriteLine(content.Description + " " + content.LinkURL);
+                    Console.WriteLine(content.ImageURL);
 
-            // Check content to see if it's been syndicated before, then syndicate it if it hasn't
-            Console.WriteLine();
-            if(foundContent.Count > 0)
-            {
-                Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + "-=[ " + foundContent.Count.ToString() + " Results ]=-");
-                var handler = new HttpClientHandler()
-                {
-                    ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-                };
-                using var http = new SimpleHttpClient(handler);
-                if (useTelegram)
-                {
-                    telegram = new TelegramBotClient(config.TelegramKey);
-                }
-                foreach (var content in foundContent)
-                {
-                    var previouslySyndicated = false;
-                    foreach (var syndicatedURL in config.SyndicatedURLs)
-                    {
-                        // If the URL or description is an exact match, don't syndicate it again
-                        if (syndicatedURL.URL == content.LinkURL || (syndicatedURL.Description != null && syndicatedURL.Description == content.Description))
+                    // Save to config
+                    config.SyndicatedURLs.Add
+                    (
+                        new ConfigSyndicatedUrl
                         {
-                            previouslySyndicated = true;
-                            break;
+                            Syndicated = DateTime.Now,
+                            URL = content.LinkURL,
+                            Description = content.Description
                         }
-                    }
-                    if (!previouslySyndicated)
+                    );
+
+                    // Get image data to stream and move it into a byte array
+                    var imageStream = new MemoryStream();
+                    //// byte[] imageBytes = null;
+                    try
                     {
-                        // Write to Console
-                        Console.WriteLine(content.Description + " " + content.LinkURL);
-                        Console.WriteLine(content.ImageURL);
+                        // Reddit has some annoying anti-downloader crap, change the Accept header to bypass it
+                        if (content.ImageURL.Contains("i.redd.it"))
+                        {
+                            http.DefaultRequestHeaders.Accept.Clear();
+                            http.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("*/*"));
+                        }
+                        await using var downloadStream = await http.DownloadData(content.ImageURL).ConfigureAwait(false);
+                        await downloadStream.CopyToAsync(imageStream).ConfigureAwait(false);
+                        //// imageBytes = imageStream.ToArray();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Error while downloading - " + ex);
+                        continue;
+                    }
 
-                        // Save to config
-                        config.SyndicatedURLs.Add
-                        (
-                            new SyndicatedURL
-                            {
-                                Syndicated = DateTime.Now,
-                                URL = content.LinkURL,
-                                Description = content.Description
-                            }
-                        );
+                    // Send to each syndication output
 
-                        // Get image data to stream and move it into a byte array
-                        var imageStream = new MemoryStream();
-                        //// byte[] imageBytes = null;
+                    // Telegram (Don't send tags along with it, because we don't need search)
+                    if (useTelegram)
+                    {
                         try
                         {
-                            // Reddit has some annoying anti-downloader crap, change the Accept header to bypass it
-                            if (content.ImageURL.Contains("i.redd.it"))
+                            foreach (var channel in config.TelegramChannelIDs)
                             {
-                                http.DefaultRequestHeaders.Accept.Clear();
-                                http.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("*/*"));
+                                await telegram.SendChatAction(channel, ChatAction.Typing).ConfigureAwait(false);
+                                imageStream.Seek(0, SeekOrigin.Begin);
+                                var file = Telegram.Bot.Types.InputFile.FromStream(imageStream);
+                                ////var file = Telegram.Bot.Types.InputFile.FromUri(content.ImageURL);
+                                if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
+                                {
+                                    await telegram.SendAnimation(channel, file, caption: content.Description + " " + content.LinkURL).ConfigureAwait(false);
+                                }
+                                else
+                                {
+                                    await telegram.SendPhoto(channel, file, caption: content.Description + " " + content.LinkURL).ConfigureAwait(false);
+                                }
                             }
-                            await using var downloadStream = await http.DownloadData(content.ImageURL).ConfigureAwait(false);
-                            await downloadStream.CopyToAsync(imageStream).ConfigureAwait(false);
-                            //// imageBytes = imageStream.ToArray();
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine("Error while downloading - " + ex);
-                            continue;
-                        }
-
-                        // Send to each syndication output
-
-                        // Telegram (Don't send tags along with it, because we don't need search)
-                        if (useTelegram)
-                        {
-                            try
-                            {
-                                foreach (var channel in config.TelegramChannelIDs)
-                                {
-                                    _ = telegram.SendChatActionAsync(channel, ChatAction.Typing);
-                                    imageStream.Seek(0, SeekOrigin.Begin);
-                                    var file = Telegram.Bot.Types.InputFile.FromStream(imageStream);
-                                    ////var file = Telegram.Bot.Types.InputFile.FromUri(content.ImageURL);
-                                    if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
-                                    {
-                                        await telegram.SendAnimationAsync(channel, file, caption: content.Description + " " + content.LinkURL);
-                                    }
-                                    else
-                                    {
-                                        await telegram.SendPhotoAsync(channel, file, caption: content.Description + " " + content.LinkURL);
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine("Error while posting to Telegram - " + ex);
-                            }
+                            Console.WriteLine("Error while posting to Telegram - " + ex);
                         }
                     }
                 }
             }
-            else
-            {
-                Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + "-=[ NO Results ]=-");
-            }
-
-            // Clean up entries SyndicatedURLs that are more than 30 days
-            foreach (var item in config.SyndicatedURLs.FindAll(s => s.Syndicated < DateTime.Today.AddDays(-30)).ToArray())
-            {
-                config.SyndicatedURLs.Remove(item);
-            }
-
-            // Save Config
-            File.WriteAllText("config.json", JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }), System.Text.Encoding.UTF8);
-
-            return true;
         }
+        else
+        {
+            Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + "-=[ NO Results ]=-");
+        }
+
+        // Clean up entries SyndicatedURLs that are more than 30 days
+        foreach (var item in config.SyndicatedURLs.FindAll(s => s.Syndicated < DateTime.Today.AddDays(-30)).ToArray())
+        {
+            config.SyndicatedURLs.Remove(item);
+        }
+
+        // Save Config
+        await File.WriteAllTextAsync("config.json", JsonSerializer.Serialize(config, _jsonOptions), System.Text.Encoding.UTF8).ConfigureAwait(false);
+
+        return true;
     }
 }
