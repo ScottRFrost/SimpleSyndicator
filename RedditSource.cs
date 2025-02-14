@@ -168,7 +168,7 @@ public record Data1
     public object pwls { get; set; }
     public string link_flair_css_record { get; set; }
     public int downs { get; set; }
-    public int thumbnail_height { get; set; }
+    public int? thumbnail_height { get; set; }
     public object top_awarded_type { get; set; }
     public bool hide_score { get; set; }
     public string name { get; set; }
@@ -179,7 +179,7 @@ public record Data1
     public int ups { get; set; }
     public int total_awards_received { get; set; }
     public Media_Embed media_embed { get; set; }
-    public int thumbnail_width { get; set; }
+    public int? thumbnail_width { get; set; }
     public object author_flair_template_id { get; set; }
     public bool is_original_content { get; set; }
     public object[] user_reports { get; set; }
@@ -430,7 +430,7 @@ public record Crosspost_Parent_List
     public object pwls { get; set; }
     public string link_flair_css_record { get; set; }
     public int downs { get; set; }
-    public int thumbnail_height { get; set; }
+    public int? thumbnail_height { get; set; }
     public object top_awarded_type { get; set; }
     public bool hide_score { get; set; }
     public string name { get; set; }
@@ -441,7 +441,7 @@ public record Crosspost_Parent_List
     public int ups { get; set; }
     public int total_awards_received { get; set; }
     public Media_Embed1 media_embed { get; set; }
-    public int thumbnail_width { get; set; }
+    public int? thumbnail_width { get; set; }
     public string author_flair_template_id { get; set; }
     public bool is_original_content { get; set; }
     public object[] user_reports { get; set; }
