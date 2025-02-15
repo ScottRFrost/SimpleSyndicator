@@ -17,12 +17,12 @@ static class SimpleSyndicator
     public static async Task<bool> Start()
     {
         // Read Config
-        Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Reading config...");
-        var json = await File.ReadAllTextAsync(Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + "config.json").ConfigureAwait(false);
-        var config = JsonSerializer.Deserialize<Config>(json);
+        Console.WriteLine($"{DateTime.Now:M/d HH:mm} Reading config...");
+        var json = await File.ReadAllTextAsync($"{Directory.GetCurrentDirectory()}{Path.DirectorySeparatorChar}config.json").ConfigureAwait(false);
+        var config = JsonSerializer.Deserialize<Config>(json, _jsonOptions);
         config.SyndicatedURLs ??= [];
-        var foundContent = new List<SyndicatorContent>();
-        Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Read config");
+        var startingCount = config.SyndicatedURLs.Count;
+        Console.WriteLine($"{DateTime.Now:M/d HH:mm} Read config.  {config.Sources.Count} sources, {startingCount} previously syndicated images.");
 
         // Telegram Setup
         var useTelegram = false;
@@ -34,6 +34,7 @@ static class SimpleSyndicator
 
         // Parse Reddit Sources
         var redditSource = new RedditSource();
+        var foundContent = new List<SyndicatorContent>();
         foreach (var source in config.Sources)
         {
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Getting " + source.Type + " - " + source.URL);
@@ -54,7 +55,7 @@ static class SimpleSyndicator
 
         // Check content to see if it's been syndicated before, then syndicate it if it hasn't
         Console.WriteLine();
-        if(foundContent.Count > 0)
+        if (foundContent.Count > 0)
         {
             Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + "-=[ " + foundContent.Count.ToString() + " Results ]=-");
             #pragma warning disable S4830 // Server certificates should be verified during SSL/TLS connections
@@ -161,7 +162,8 @@ static class SimpleSyndicator
         }
 
         // Save Config
-        await File.WriteAllTextAsync("config.json", JsonSerializer.Serialize(config, _jsonOptions), System.Text.Encoding.UTF8).ConfigureAwait(false);
+        await File.WriteAllTextAsync($"{Directory.GetCurrentDirectory()}{Path.DirectorySeparatorChar}config.json", JsonSerializer.Serialize(config, _jsonOptions), System.Text.Encoding.UTF8).ConfigureAwait(false);
+        Console.WriteLine($"{DateTime.Now:M/d HH:mm} Wrote config.  {config.Sources.Count} sources, {startingCount} >> {config.SyndicatedURLs.Count} syndicated images.");
 
         return true;
     }
