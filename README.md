@@ -10,7 +10,7 @@ Sample config.json (in .gitignore for this repo so I don't accidentally upload i
   "Sources": [
     {
       "Type": "Reddit",
-      "URL": "https://www.reddit.com/r/beachpron/new.json",
+      "URL": "https://www.reddit.com/r/beachporn/new.json",
       "Tags": "#beach #relaxation"
     },
     {
