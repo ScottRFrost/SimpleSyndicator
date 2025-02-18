@@ -7,3 +7,4 @@
 /obj
 /Properties/PublishProfiles/FolderProfile.pubxml.user
 SimpleSyndicator.csproj.user
+/config.json
