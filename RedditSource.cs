@@ -106,7 +106,7 @@ public class RedditSource : BaseSource
                         }
                     }
                 }
-                else if (!string.IsNullOrWhiteSpace(item.url) && (item.url.EndsWith(".jpeg") || item.url.EndsWith(".jpg") || item.url.EndsWith(".png") || item.url.EndsWith(".gif") || item.url.EndsWith(".webp")))
+                else if (!string.IsNullOrWhiteSpace(item.url) && (item.url.EndsWith(".jpeg") || item.url.EndsWith(".jpg") || item.url.EndsWith(".png") || item.url.EndsWith(".gif") || item.url.EndsWith(".webp") || item.url.EndsWith(".mp4")))
                 {
                     syndicatorContents.Add(new SyndicatorContent
                     {

@@ -100,7 +100,6 @@ static class SimpleSyndicator
 
                     // Get image data to stream and move it into a byte array
                     var imageStream = new MemoryStream();
-                    //// byte[] imageBytes = null;
                     try
                     {
                         // Reddit has some annoying anti-downloader crap, change the Accept header to bypass it
@@ -111,7 +110,6 @@ static class SimpleSyndicator
                         }
                         await using var downloadStream = await http.DownloadData(content.ImageURL).ConfigureAwait(false);
                         await downloadStream.CopyToAsync(imageStream).ConfigureAwait(false);
-                        //// imageBytes = imageStream.ToArray();
                     }
                     catch (Exception ex)
                     {
@@ -130,8 +128,7 @@ static class SimpleSyndicator
                             {
                                 await telegram.SendChatAction(channel, ChatAction.Typing).ConfigureAwait(false);
                                 imageStream.Seek(0, SeekOrigin.Begin);
-                                var file = Telegram.Bot.Types.InputFile.FromStream(imageStream);
-                                ////var file = Telegram.Bot.Types.InputFile.FromUri(content.ImageURL);
+                                var file = Telegram.Bot.Types.InputFile.FromStream(imageStream, content.ImageURL[(content.ImageURL.LastIndexOf('/') + 1)..]);
                                 if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
                                 {
                                     await telegram.SendAnimation(channel, file, caption: content.Description + " " + content.LinkURL).ConfigureAwait(false);
