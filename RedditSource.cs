@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.ServiceModel.Syndication;
@@ -14,11 +14,19 @@ public class RedditSource : BaseSource
 {
     public override async Task<SyndicatorContent[]> Parse(string Url, string Tags = "")
     {
-        Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " -=[ Start RedditSource ]=-");
+        Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} -=[ Start RedditSource ]=-");
+        
+        // Rewrite .json to .rss to bypass Reddit's unauthenticated JSON blocks
+        if (Url.Contains(".json"))
+        {
+            Url = Url.Replace(".json", ".rss");
+        }
+
         #pragma warning disable S4830 // Server certificates should be verified during SSL/TLS connections
         var handler = new HttpClientHandler()
         {
-            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
+            AutomaticDecompression = System.Net.DecompressionMethods.All
         };
         #pragma warning restore S4830 // Server certificates should be verified during SSL/TLS connections
         var syndicatorContents = new List<SyndicatorContent>();
@@ -32,12 +40,16 @@ public class RedditSource : BaseSource
 
             foreach (var rssItem in rss.Items)
             {
-                if (rssItem.Content is not TextSyndicationContent)
+                string content = string.Empty;
+                if (rssItem.Content is TextSyndicationContent textContent)
                 {
-                    continue;
+                    content = textContent.Text;
+                }
+                else if (rssItem.Summary is TextSyndicationContent summaryContent)
+                {
+                    content = summaryContent.Text;
                 }
 
-                var content = ((TextSyndicationContent)rssItem.Content).Text;
                 var syndicatorContent = new SyndicatorContent
                 {
                     Description = rssItem.Title.Text.Trim(),
@@ -46,15 +58,50 @@ public class RedditSource : BaseSource
                     Tags = Tags
                 };
 
-                // Find image URL via [link] in Content
+                // 1. Try to extract URL from [link]
+                string linkUrl = string.Empty;
                 if (content.Contains(">[link]<"))
                 {
-                    var imageURL = content[..(content.IndexOf(">[link]<") - 1)];
-                    imageURL = imageURL[(imageURL.LastIndexOf('\"') + 1)..];
-                    if (imageURL.EndsWith(".jpg", StringComparison.InvariantCultureIgnoreCase) || imageURL.EndsWith(".png", StringComparison.InvariantCultureIgnoreCase))
+                    var linkIdx = content.IndexOf(">[link]<");
+                    if (linkIdx > 0)
                     {
-                        syndicatorContent.ImageURL = imageURL;
+                        var urlPart = content[..(linkIdx - 1)];
+                        var quoteIdx = urlPart.LastIndexOf('\"');
+                        if (quoteIdx >= 0)
+                        {
+                            linkUrl = urlPart[(quoteIdx + 1)..];
+                        }
                     }
+                }
+
+                // 2. Try to get media:thumbnail URL
+                string thumbnailUrl = string.Empty;
+                var thumbnailExtension = rssItem.ElementExtensions.FirstOrDefault(e => e.OuterName == "thumbnail" && e.OuterNamespace == "http://search.yahoo.com/mrss/");
+                if (thumbnailExtension != null)
+                {
+                    using var thumbXmlReader = thumbnailExtension.GetReader();
+                    thumbnailUrl = thumbXmlReader.GetAttribute("url");
+                }
+
+                // 3. Determine the best image/media URL
+                string candidateUrl = string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(linkUrl) && IsMediaUrl(linkUrl))
+                {
+                    candidateUrl = linkUrl;
+                }
+                else if (!string.IsNullOrWhiteSpace(thumbnailUrl))
+                {
+                    candidateUrl = GetHighResImageUrl(thumbnailUrl);
+                }
+                else if (!string.IsNullOrWhiteSpace(linkUrl))
+                {
+                    candidateUrl = GetHighResImageUrl(linkUrl);
+                }
+
+                if (!string.IsNullOrWhiteSpace(candidateUrl) && IsMediaUrl(candidateUrl))
+                {
+                    syndicatorContent.ImageURL = candidateUrl;
                 }
 
                 // Shorten URL
@@ -67,14 +114,14 @@ public class RedditSource : BaseSource
                 // If we found an image, return this item
                 if (syndicatorContent.ImageURL != string.Empty)
                 {
-                    Console.WriteLine(syndicatorContent.Description + " | " + syndicatorContent.LinkURL + " | " + syndicatorContent.ImageURL);
+                    Console.WriteLine($"{syndicatorContent.Description} | {syndicatorContent.LinkURL} | {syndicatorContent.ImageURL}");
                     syndicatorContents.Add(syndicatorContent);
                 }
             }
         }
         else
         {
-            // Parse JSON
+            // Parse JSON (kept for compatibility, though we rewrite .json to .rss above)
             var jsonItems = JsonSerializer.Deserialize<RedditJson>(response);
             foreach (var item in jsonItems.data.children.Select(i => i.data))
             {
@@ -85,8 +132,8 @@ public class RedditSource : BaseSource
                     {
                         index++;
 
-                        // The gallery json is a disaster with randomly named keys, work around it by trying different extensions
-                        foreach (var extension in new string[] { ".jpeg", ".jpg", ".png", ".gif", ".webp" })
+                        string[] extensions = [".jpeg", ".jpg", ".png", ".gif", ".webp"];
+                        foreach (var extension in extensions)
                         {
                             using var extRequest = new HttpRequestMessage(HttpMethod.Head, $"https://i.redd.it/{mediaID}{extension}");
                             extRequest.Headers.Accept.Clear();
@@ -119,9 +166,50 @@ public class RedditSource : BaseSource
             }
         }
 
-        Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " -=[ End RedditSource ]=-");
+        Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} -=[ End RedditSource ]=-");
         Console.WriteLine();
         return [.. syndicatorContents];
+    }
+
+    private static bool IsMediaUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        var cleanUrl = url.Split('?')[0]; // Strip query parameters
+        return cleanUrl.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+               cleanUrl.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+               cleanUrl.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+               cleanUrl.EndsWith(".gif", StringComparison.OrdinalIgnoreCase) ||
+               cleanUrl.EndsWith(".webp", StringComparison.OrdinalIgnoreCase) ||
+               cleanUrl.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetHighResImageUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return string.Empty;
+        
+        // If it's preview.redd.it (but not external-preview.redd.it), convert it to i.redd.it
+        if (url.Contains("preview.redd.it") && !url.Contains("external-preview.redd.it"))
+        {
+            try
+            {
+                var cleanUrl = url.Split('?')[0];
+                var uri = new Uri(cleanUrl);
+                return $"https://i.redd.it{uri.AbsolutePath}";
+            }
+            catch
+            {
+                // fallback
+            }
+        }
+        
+        // If it's already an i.redd.it link, just strip query parameters
+        if (url.Contains("i.redd.it"))
+        {
+            return url.Split('?')[0];
+        }
+        
+        // For external-preview or other domains, preserve query parameters (like signature keys)
+        return url;
     }
 }
 

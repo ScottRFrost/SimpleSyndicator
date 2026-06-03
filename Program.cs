@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading;
 
 namespace SimpleSyndicator;
@@ -7,16 +7,16 @@ public static class Program
 {
     public static void Main(string[] args)
     {
-        Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " Starting Up");
+        Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Starting Up");
         try
         {
-            Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " MAIN LOOP STARTING...");
+            Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} MAIN LOOP STARTING...");
             SimpleSyndicator.Start().Wait();
-            Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " MAIN LOOP CLEAN EXIT");
+            Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} MAIN LOOP CLEAN EXIT");
         }
         catch (Exception ex)
         {
-            Console.WriteLine(DateTime.Now.ToString("M/d HH:mm") + " MAIN LOOP EXIT ERROR - " + ex);
+            Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} MAIN LOOP EXIT ERROR - {ex}");
         }
     }
 }
