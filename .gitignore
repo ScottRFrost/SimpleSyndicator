@@ -3,6 +3,7 @@
 ################################################################################
 
 /.vs
+/.vscode
 /bin
 /obj
 /Properties/PublishProfiles/FolderProfile.pubxml.user
