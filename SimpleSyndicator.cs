@@ -15,54 +15,120 @@ namespace SimpleSyndicator;
 
 static class SimpleSyndicator
 {
-    private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private static string GetConfigPath() => Path.Combine(Directory.GetCurrentDirectory(), "config.json");
+
+    public static async Task RunRedditAuthAsync()
+    {
+        var configPath = GetConfigPath();
+        if (!File.Exists(configPath))
+        {
+            throw new FileNotFoundException(
+                $"config.json not found at '{configPath}'. Create it first with a \"Reddit\" section containing ClientId, ClientSecret, and RedirectUri.",
+                configPath);
+        }
+
+        Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Reading config...");
+        var json = await File.ReadAllTextAsync(configPath).ConfigureAwait(false);
+        var config = JsonSerializer.Deserialize<Config>(json, _jsonOptions)
+            ?? throw new InvalidOperationException("Failed to deserialize config.json.");
+
+        if (config.Reddit == null)
+        {
+            throw new InvalidOperationException(
+                "config.json is missing the \"Reddit\" section. Add \"Reddit\": { \"ClientId\": \"...\", \"ClientSecret\": \"...\", \"RedirectUri\": \"http://localhost:8080/callback\" } and re-run with --reddit-auth.");
+        }
+
+        using var authClient = new RedditAuthClient(config.Reddit);
+        await authClient.RunInteractiveOAuthAsync().ConfigureAwait(false);
+
+        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(config, _jsonOptions), System.Text.Encoding.UTF8).ConfigureAwait(false);
+        Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Saved Reddit RefreshToken and AccessToken to config.json.");
+    }
 
     public static async Task<bool> Start()
     {
-        // Fetch latest Chrome + Windows User-Agent on startup
-        await SimpleHttpClient.InitializeUserAgent().ConfigureAwait(false);
-
         // Read Config
+        var configPath = GetConfigPath();
         Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Reading config...");
-        var json = await File.ReadAllTextAsync($"{Directory.GetCurrentDirectory()}{Path.DirectorySeparatorChar}config.json").ConfigureAwait(false);
-        var config = JsonSerializer.Deserialize<Config>(json, _jsonOptions);
+        var json = await File.ReadAllTextAsync(configPath).ConfigureAwait(false);
+        var config = JsonSerializer.Deserialize<Config>(json, _jsonOptions)
+            ?? throw new InvalidOperationException("Failed to deserialize config.json.");
+        config.Sources ??= [];
         config.SyndicatedURLs ??= [];
         var startingCount = config.SyndicatedURLs.Count;
         Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Read config.  {config.Sources.Count} sources, {startingCount} previously syndicated images.");
 
-        // Telegram Setup
-        var useTelegram = false;
-        if(config.TelegramKey.Length > 0)
+        // Only fetch Chrome User-Agent upfront if Reddit is running in browser-cookie mode
+        var userAgentInitialized = false;
+        if (RedditAuthClient.ResolveAuthMode(config.Reddit) == RedditAuthMode.SessionCookie)
         {
-            useTelegram = true;
+            await SimpleHttpClient.InitializeUserAgent().ConfigureAwait(false);
+            userAgentInitialized = true;
         }
+
+        // Telegram Setup
+        var useTelegram = !string.IsNullOrWhiteSpace(config.TelegramKey);
         TelegramBotClient telegram = null;
 
         // Parse Reddit Sources
-        var redditSource = new RedditSource();
+        using var redditSource = new RedditSource(config.Reddit);
         var foundContent = new List<SyndicatorContent>();
+        var redditCircuitBroken = false;
+        var sourceDelayBaseSeconds = config.Reddit?.SourceDelaySeconds ?? (redditSource.AuthMode == RedditAuthMode.OAuth2 ? 5 : 30);
+
         for (int i = 0; i < config.Sources.Count; i++)
         {
             var source = config.Sources[i];
+            var isReddit = string.Equals(source.Type, "reddit", StringComparison.OrdinalIgnoreCase);
+            if (isReddit && redditCircuitBroken)
+            {
+                continue;
+            }
+
             Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Getting {source.Type} - {source.URL}");
             try
             {
-                switch (source.Type.ToLowerInvariant())
+                if (isReddit)
                 {
-                    case "reddit":
-                        foundContent.AddRange(await redditSource.Parse(source.URL, source.Tags).ConfigureAwait(false));
-                        break;
+                    foundContent.AddRange(await redditSource.Parse(source).ConfigureAwait(false));
                 }
+            }
+            catch (RedditApiException ex) when (ex.ShouldAbortRun)
+            {
+                Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Circuit breaker tripped on {source.Type} - {source.URL}: {ex.Message}");
+                Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Skipping any remaining Reddit sources in this run.");
+                redditCircuitBroken = true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Error on {source.Type} - {source.URL}\r\n{ex}");
             }
 
-            if (i < config.Sources.Count - 1)
+            var hasMoreRunnableSources = false;
+            for (int j = i + 1; j < config.Sources.Count; j++)
             {
-                Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Pausing 30 seconds before next source...");
-                await Task.Delay(30000).ConfigureAwait(false);
+                var nextIsReddit = string.Equals(config.Sources[j].Type, "reddit", StringComparison.OrdinalIgnoreCase);
+                if (!redditCircuitBroken || !nextIsReddit)
+                {
+                    hasMoreRunnableSources = true;
+                    break;
+                }
+            }
+
+            if (hasMoreRunnableSources)
+            {
+                var pause = RedditAuthClient.ComputeJitteredDelay(sourceDelayBaseSeconds);
+                if (pause > TimeSpan.Zero)
+                {
+                    Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Pausing {pause.TotalSeconds:F1} seconds before next source...");
+                    await Task.Delay(pause).ConfigureAwait(false);
+                }
             }
         }
 
@@ -71,6 +137,10 @@ static class SimpleSyndicator
         if (foundContent.Count > 0)
         {
             Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} -=[ Parsing {foundContent.Count} Results ]=-");
+            if (!userAgentInitialized)
+            {
+                await SimpleHttpClient.InitializeUserAgent().ConfigureAwait(false);
+            }
             #pragma warning disable S4830 // Server certificates should be verified during SSL/TLS connections
             var handler = new HttpClientHandler()
             {
@@ -83,6 +153,8 @@ static class SimpleSyndicator
             {
                 telegram = new TelegramBotClient(config.TelegramKey);
             }
+            var mediaDelayBaseSeconds = config.Reddit?.MediaDelaySeconds ?? 5;
+            var processedNewItems = 0;
             foreach (var content in foundContent)
             {
                 var previouslySyndicated = false;
@@ -97,6 +169,16 @@ static class SimpleSyndicator
                 }
                 if (!previouslySyndicated)
                 {
+                    if (processedNewItems > 0)
+                    {
+                        var mediaDelay = RedditAuthClient.ComputeJitteredDelay(mediaDelayBaseSeconds);
+                        if (mediaDelay > TimeSpan.Zero)
+                        {
+                            await Task.Delay(mediaDelay).ConfigureAwait(false);
+                        }
+                    }
+                    processedNewItems++;
+
                     // Write to Console
                     Console.WriteLine($"{content.Description} {content.LinkURL} -- {content.ImageURL}");
 
@@ -270,7 +352,9 @@ static class SimpleSyndicator
                             {
                                 await telegram.SendChatAction(channel, ChatAction.Typing).ConfigureAwait(false);
                                 imageStream.Seek(0, SeekOrigin.Begin);
-                                var file = Telegram.Bot.Types.InputFile.FromStream(imageStream, content.ImageURL[(content.ImageURL.LastIndexOf('/') + 1)..]);
+                                var cleanImageUrl = content.ImageURL.Split('?')[0];
+                                var fileName = cleanImageUrl[(cleanImageUrl.LastIndexOf('/') + 1)..];
+                                var file = Telegram.Bot.Types.InputFile.FromStream(imageStream, fileName);
                                 if (content.ImageURL.Contains(".gif", StringComparison.InvariantCultureIgnoreCase) || content.ImageURL.Contains(".mp4", StringComparison.InvariantCultureIgnoreCase))
                                 {
                                     await telegram.SendAnimation(channel, file, caption: content.Description + " " + content.LinkURL).ConfigureAwait(false);
@@ -288,9 +372,6 @@ static class SimpleSyndicator
                             Console.WriteLine($"Error while posting to Telegram - {ex}");
                         }
                     }
-
-					// Pause for 5 seconds between each image to look like human browsing
-					await Task.Delay(5000).ConfigureAwait(false);
                 }
             }
         }
@@ -306,7 +387,7 @@ static class SimpleSyndicator
         }
 
         // Save Config
-        await File.WriteAllTextAsync($"{Directory.GetCurrentDirectory()}{Path.DirectorySeparatorChar}config.json", JsonSerializer.Serialize(config, _jsonOptions), System.Text.Encoding.UTF8).ConfigureAwait(false);
+        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(config, _jsonOptions), System.Text.Encoding.UTF8).ConfigureAwait(false);
         Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Wrote config.  {config.Sources.Count} sources, {startingCount} >> {config.SyndicatedURLs.Count} syndicated images.");
 
         return true;
