@@ -1,6 +1,6 @@
 SimpleSyndicator browses Reddit using a real Chromium or Firefox browser via [Microsoft Playwright](https://playwright.dev/dotnet/) (no Reddit OAuth2 app or API credentials required) and posts discovered images, galleries, GIFs, and MP4s to Telegram using [TelegramBots/Telegram.Bot](https://github.com/TelegramBots/Telegram.Bot).
 
-Multi-image galleries and videos are extracted directly from Reddit pages, and each syndicated item is posted with a link back to Reddit for source / credits. Images that exceed Telegram's pixel dimensions or 10 MB upload limit are automatically resized or resampled natively in .NET using [SixLabors/ImageSharp](https://github.com/SixLabors/ImageSharp/). Both `win-x64` and `linux-x64` are supported.
+Multi-image galleries and videos are extracted directly from Reddit pages, and each syndicated item is posted with a link back to Reddit for source / credits. Images that exceed Telegram's pixel dimensions or 10 MB upload limit are automatically resized or resampled natively in .NET using [SkiaSharp](https://github.com/mono/SkiaSharp). Both `win-x64` and `linux-x64` are supported.
 
 Extensible to allow new sources / new destinations easily.
 
@@ -31,6 +31,12 @@ SimpleSyndicator can browse public subreddits anonymously or use a signed-in Red
    ```
 2. Sign in to Reddit normally inside the opened browser window (completing any 2FA or verification prompts directly in the browser), then press `Enter` in the terminal.
 3. SimpleSyndicator writes a portable Playwright storage state file (`reddit-state.json` by default). You can copy `reddit-state.json` alongside the app on a headless `linux-x64` server so future headless runs reuse your session automatically.
+4. To open a visible browser window with your saved `reddit-state.json` session loaded for interactive testing, run:
+   ```bash
+   SimpleSyndicator.exe -JustStartBrowser
+   # or open a specific URL directly:
+   SimpleSyndicator.exe -JustStartBrowser "https://www.reddit.com/r/cats/search/?q=flair%3ACat&restrict_sr=on&sort=new"
+   ```
 
 Alternative session options under `"Reddit"` in `config.json`:
 - **`UserDataDir`**: Path to a persistent browser profile directory (uses `LaunchPersistentContextAsync` instead of `StorageStatePath`).

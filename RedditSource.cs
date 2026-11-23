@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace SimpleSyndicator;
@@ -10,6 +12,10 @@ namespace SimpleSyndicator;
 public class RedditSource : BaseSource, IAsyncDisposable
 {
     private static readonly TimeSpan CursorReanchorInterval = TimeSpan.FromHours(24);
+    private static readonly Regex SluggedMediaPathRegex = new(
+        @"^/+(?:.+-v\d+-)([a-z0-9_]+\.(?:jpg|jpeg|png|gif|webp|mp4))$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly ConcurrentDictionary<string, string> SignedPreviewFallbacks = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly RedditConfig _redditConfig;
     private readonly RedditBrowserClient _browserClient;
@@ -51,7 +57,8 @@ public class RedditSource : BaseSource, IAsyncDisposable
     public async Task<SyndicatorContent[]> Parse(
         ConfigSource source,
         ISet<string> alreadySyndicatedUrls = null,
-        ISet<string> alreadySyndicatedDescriptions = null)
+        ISet<string> alreadySyndicatedDescriptions = null,
+        Func<SyndicatorContent, Task> onSyndicateItemAsync = null)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -59,7 +66,7 @@ public class RedditSource : BaseSource, IAsyncDisposable
 
         var effectiveLimit = source.Limit ?? _redditConfig?.DefaultLimit ?? 25;
         var supportsCursor = RedditBrowserClient.SupportsIncrementalCursor(source.URL);
-        var cursorIsFresh = !source.LastSeenUtc.HasValue || (DateTime.UtcNow - ToUtc(source.LastSeenUtc.Value)) <= CursorReanchorInterval;
+        var cursorIsFresh = !source.LastSeenUtc.HasValue || (DateTime.UtcNow - source.LastSeenUtc.Value.EnsureUtc()) <= CursorReanchorInterval;
         var stopBeforeFullname = supportsCursor && !string.IsNullOrWhiteSpace(source.LastSeenFullname) && cursorIsFresh
             ? source.LastSeenFullname
             : null;
@@ -73,8 +80,30 @@ public class RedditSource : BaseSource, IAsyncDisposable
             Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Re-anchoring 24h+ cursor for {source.URL} (limit={effectiveLimit})...");
         }
 
+        List<SyndicatorContent> streamedItems = null;
+        Func<RedditBrowserPost, Task> onPostVisited = null;
+        if (onSyndicateItemAsync != null)
+        {
+            streamedItems = [];
+            onPostVisited = async visitedPost =>
+            {
+                var postItems = ConvertPostsToContent([visitedPost], source.Tags ?? string.Empty);
+                foreach (var item in postItems)
+                {
+                    Console.WriteLine($"{item.Description} | {item.LinkURL} | {item.ImageURL}");
+                    streamedItems.Add(item);
+                    await onSyndicateItemAsync(item).ConfigureAwait(false);
+                }
+            };
+        }
+
         var (rawPosts, newestFullname) = await _browserClient
-            .BrowseListingAsync(source.URL, effectiveLimit, stopBeforeFullname)
+            .BrowseListingAsync(
+                source.URL,
+                effectiveLimit,
+                stopBeforeFullname,
+                shouldSkipPost: post => IsPostAlreadySyndicated(post, alreadySyndicatedUrls, alreadySyndicatedDescriptions),
+                onPostVisitedAsync: onPostVisited)
             .ConfigureAwait(false);
 
         if (supportsCursor)
@@ -90,9 +119,17 @@ public class RedditSource : BaseSource, IAsyncDisposable
             }
         }
 
+        if (streamedItems != null)
+        {
+            Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} -=[ End RedditSource ]=-");
+            Console.WriteLine();
+            return [.. streamedItems];
+        }
+
         var expandDetails = _redditConfig?.ExpandPostDetails ?? true;
         var detailDelayBaseSeconds = _redditConfig?.MediaDelaySeconds ?? 4;
-        var resolvedPosts = new List<RedditBrowserPost>(rawPosts.Count);
+        var maxAgeHours = _redditConfig?.MaxPostAgeHours ?? 24;
+        List<RedditBrowserPost> resolvedPosts = [with(capacity: rawPosts.Count)];
 
         foreach (var post in rawPosts)
         {
@@ -101,23 +138,54 @@ public class RedditSource : BaseSource, IAsyncDisposable
                 continue;
             }
 
+            if (RedditBrowserClient.IsPostOlderThan(post, maxAgeHours))
+            {
+                Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Ignoring post '{post.Title}' ({post.Fullname}) because it is {RedditBrowserClient.FormatPostAge(post)} (> {maxAgeHours}h limit).");
+                if (supportsCursor && !post.IsStickied)
+                {
+                    Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Reached post older than {maxAgeHours} hours on new-sorted source; stopping remaining post processing.");
+                    break;
+                }
+
+                continue;
+            }
+
             if (expandDetails &&
                 post.NeedsDetailPage &&
-                !string.IsNullOrWhiteSpace(post.Permalink) &&
-                !IsPostAlreadySyndicated(post, alreadySyndicatedUrls, alreadySyndicatedDescriptions))
+                !string.IsNullOrWhiteSpace(post.Permalink))
             {
+                if (IsPostAlreadySyndicated(post, alreadySyndicatedUrls, alreadySyndicatedDescriptions))
+                {
+                    Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Skipping already-syndicated post '{post.Title}' ({post.Fullname}).");
+                    continue;
+                }
+
                 var delay = RedditBrowserClient.ComputeJitteredDelay(detailDelayBaseSeconds);
                 if (delay > TimeSpan.Zero)
                 {
                     await _delayAsync(delay).ConfigureAwait(false);
                 }
 
+                Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Opening post '{post.Title}' ({post.Fullname}) to inspect media/gallery -> {post.Permalink}");
+
                 try
                 {
                     var detailPost = await _browserClient.BrowsePostDetailAsync(post.Permalink).ConfigureAwait(false);
                     if (detailPost != null)
                     {
-                        resolvedPosts.Add(MergePostDetails(post, detailPost));
+                        if (RedditBrowserClient.IsPostOlderThan(detailPost, maxAgeHours))
+                        {
+                            Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Ignoring post '{detailPost.Title}' ({detailPost.Fullname}) because it is {RedditBrowserClient.FormatPostAge(detailPost)} (> {maxAgeHours}h limit).");
+                            if (supportsCursor && !detailPost.IsStickied)
+                            {
+                                Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Reached post older than {maxAgeHours} hours on new-sorted source; stopping remaining post detail checks.");
+                                break;
+                            }
+
+                            continue;
+                        }
+
+                        resolvedPosts.Add(RedditBrowserClient.MergePostDetails(post, detailPost));
                         continue;
                     }
                 }
@@ -145,9 +213,13 @@ public class RedditSource : BaseSource, IAsyncDisposable
         return items;
     }
 
-    public Task DownloadMediaAsync(string mediaUrl, Stream destination)
+    public Task DownloadMediaAsync(
+        string mediaUrl,
+        Stream destination,
+        string refererUrl = null,
+        string fallbackMediaUrl = null)
     {
-        return _browserClient.DownloadMediaAsync(mediaUrl, destination);
+        return _browserClient.DownloadMediaAsync(mediaUrl, destination, refererUrl, fallbackMediaUrl);
     }
 
     public static SyndicatorContent[] ConvertPostsToContent(IEnumerable<RedditBrowserPost> posts, string tags = "")
@@ -168,6 +240,9 @@ public class RedditSource : BaseSource, IAsyncDisposable
 
             var title = WebUtility.HtmlDecode(post.Title ?? string.Empty).Trim();
             var normalizedGalleryMedia = NormalizeAndDeduplicateMedia(post.MediaUrls);
+            var referrerUrl = !string.IsNullOrWhiteSpace(post.Permalink)
+                ? RedditBrowserClient.BuildPostDetailUrl(post.Permalink)
+                : $"https://www.reddit.com/comments/{post.Id}/";
 
             if (post.IsGallery || normalizedGalleryMedia.Count > 1)
             {
@@ -180,11 +255,14 @@ public class RedditSource : BaseSource, IAsyncDisposable
                 for (int i = 0; i < total; i++)
                 {
                     var index = i + 1;
+                    var imageUrl = normalizedGalleryMedia[i];
                     results.Add(new SyndicatorContent
                     {
                         Description = $"{title} {index}/{total}",
                         LinkURL = $"https://redd.it/{post.Id}#{index}",
-                        ImageURL = normalizedGalleryMedia[i],
+                        ImageURL = imageUrl,
+                        FallbackImageURL = GetSignedPreviewFallbackUrl(imageUrl),
+                        ReferrerURL = referrerUrl,
                         Tags = tags
                     });
                 }
@@ -200,6 +278,8 @@ public class RedditSource : BaseSource, IAsyncDisposable
                     Description = title,
                     LinkURL = $"https://redd.it/{post.Id}",
                     ImageURL = candidateUrl,
+                    FallbackImageURL = GetSignedPreviewFallbackUrl(candidateUrl),
+                    ReferrerURL = referrerUrl,
                     Tags = tags
                 });
             }
@@ -274,27 +354,62 @@ public class RedditSource : BaseSource, IAsyncDisposable
             return string.Empty;
         }
 
-        if (url.Contains("preview.redd.it", StringComparison.OrdinalIgnoreCase) &&
-            !url.Contains("external-preview.redd.it", StringComparison.OrdinalIgnoreCase))
+        var isExternalPreview = url.Contains("external-preview.redd.it", StringComparison.OrdinalIgnoreCase);
+        var isPreview = !isExternalPreview && url.Contains("preview.redd.it", StringComparison.OrdinalIgnoreCase);
+        var isDirectReddIt = url.Contains("i.redd.it", StringComparison.OrdinalIgnoreCase);
+
+        if (isPreview || isDirectReddIt)
         {
             try
             {
                 var cleanUrl = url.Split('?')[0];
                 var uri = new Uri(cleanUrl);
-                return $"https://i.redd.it{uri.AbsolutePath}";
+                var normalizedPath = uri.AbsolutePath;
+                var slugMatch = SluggedMediaPathRegex.Match(normalizedPath);
+                if (slugMatch.Success)
+                {
+                    normalizedPath = $"/{slugMatch.Groups[1].Value}";
+                }
+
+                var highResUrl = $"https://i.redd.it{normalizedPath}";
+                if (isPreview &&
+                    url.Contains('?') &&
+                    !string.Equals(highResUrl, url, StringComparison.OrdinalIgnoreCase))
+                {
+                    SignedPreviewFallbacks[highResUrl] = url;
+                }
+
+                return highResUrl;
             }
             catch
             {
-                // Fallback to original URL
+                if (isDirectReddIt)
+                {
+                    return url.Split('?')[0];
+                }
             }
         }
 
-        if (url.Contains("i.redd.it", StringComparison.OrdinalIgnoreCase))
+        return url;
+    }
+
+    public static string GetSignedPreviewFallbackUrl(string highResOrRawUrl)
+    {
+        if (string.IsNullOrWhiteSpace(highResOrRawUrl))
         {
-            return url.Split('?')[0];
+            return string.Empty;
         }
 
-        return url;
+        var trimmed = highResOrRawUrl.Trim();
+        if (SignedPreviewFallbacks.TryGetValue(trimmed, out var signedUrl))
+        {
+            return signedUrl;
+        }
+
+        var normalized = GetHighResImageUrl(trimmed);
+        return !string.IsNullOrWhiteSpace(normalized) && SignedPreviewFallbacks.TryGetValue(normalized, out signedUrl)
+            ? signedUrl
+            : string.Empty;
     }
 
     public async ValueTask DisposeAsync()
@@ -307,24 +422,10 @@ public class RedditSource : BaseSource, IAsyncDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static RedditBrowserPost MergePostDetails(RedditBrowserPost summary, RedditBrowserPost detail)
-    {
-        return summary with
-        {
-            Title = !string.IsNullOrWhiteSpace(detail.Title) ? detail.Title : summary.Title,
-            ContentHref = !string.IsNullOrWhiteSpace(detail.ContentHref) ? detail.ContentHref : summary.ContentHref,
-            IsGallery = summary.IsGallery || detail.IsGallery,
-            IsSelf = detail.IsSelf,
-            MediaUrls = detail.MediaUrls is { Length: > 0 } ? detail.MediaUrls : summary.MediaUrls,
-            ThumbnailUrl = !string.IsNullOrWhiteSpace(detail.ThumbnailUrl) ? detail.ThumbnailUrl : summary.ThumbnailUrl,
-            NeedsDetailPage = false
-        };
-    }
-
     private static List<string> NormalizeAndDeduplicateMedia(IEnumerable<string> rawUrls)
     {
         var list = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> seen = [with(StringComparer.OrdinalIgnoreCase)];
 
         if (rawUrls == null)
         {
@@ -388,12 +489,5 @@ public class RedditSource : BaseSource, IAsyncDisposable
         }
 
         return string.Empty;
-    }
-
-    private static DateTime ToUtc(DateTime value)
-    {
-        return value.Kind == DateTimeKind.Local
-            ? value.ToUniversalTime()
-            : DateTime.SpecifyKind(value, DateTimeKind.Utc);
     }
 }

@@ -44,11 +44,23 @@ public class SimpleHttpClient : HttpClient
         CustomHeaders = [];
     }
 
-    public string AuthorizationHeader { get; set; }
+    public string AuthorizationHeader
+    {
+        get;
+        set => field = value ?? string.Empty;
+    } = string.Empty;
 
-    public string BingHeader { get; set; }
+    public string BingHeader
+    {
+        get;
+        set => field = value ?? string.Empty;
+    } = string.Empty;
 
-    public string ReferrerUri { get; set; }
+    public string ReferrerUri
+    {
+        get;
+        set => field = value ?? string.Empty;
+    } = "https://duckduckgo.com";
 
     public Dictionary<string, string> CustomHeaders { get; set; }
 

@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-#pragma warning disable CS0649 // Field 'Config.Sources' is never assigned to, and will always have its default value null
 namespace SimpleSyndicator;
 
 public record Config
@@ -21,7 +20,11 @@ public record Config
 
 public record RedditConfig
 {
-    public string Browser { get; set; } = "chromium";
+    public string Browser
+    {
+        get;
+        set => field = string.IsNullOrWhiteSpace(value) ? "firefox" : value.Trim();
+    } = "firefox";
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string BrowserChannel { get; set; }
@@ -29,9 +32,13 @@ public record RedditConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string ExecutablePath { get; set; }
 
-    public bool Headless { get; set; } = true;
+    public bool Headless { get; set; } = false;
 
-    public string StorageStatePath { get; set; } = "reddit-state.json";
+    public string StorageStatePath
+    {
+        get;
+        set => field = string.IsNullOrWhiteSpace(value) ? "reddit-state.json" : value.Trim();
+    } = "reddit-state.json";
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string UserDataDir { get; set; }
@@ -39,13 +46,31 @@ public record RedditConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string SessionCookie { get; set; }
 
-    public string Locale { get; set; } = "en-US";
+    public string Locale
+    {
+        get;
+        set => field = string.IsNullOrWhiteSpace(value) ? "en-US" : value.Trim();
+    } = "en-US";
 
-    public int NavigationTimeoutSeconds { get; set; } = 45;
+    public int NavigationTimeoutSeconds
+    {
+        get;
+        set => field = value > 0 ? Math.Clamp(value, 5, 300) : 45;
+    } = 45;
 
     public int? DefaultLimit { get; set; } = 25;
 
-    public int MaxScrollPasses { get; set; } = 4;
+    public int MaxScrollPasses
+    {
+        get;
+        set => field = Math.Max(0, value);
+    } = 4;
+
+    public int MaxPostAgeHours
+    {
+        get;
+        set => field = value > 0 ? value : 24;
+    } = 24;
 
     public bool ExpandPostDetails { get; set; } = true;
 
@@ -81,4 +106,3 @@ public record ConfigSyndicatedUrl
     public string URL { get; set; }
     public string Description { get; set; }
 }
-#pragma warning restore CS0649 // Field 'Config.Sources' is never assigned to, and will always have its default value null
