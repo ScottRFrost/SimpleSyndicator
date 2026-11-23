@@ -21,23 +21,42 @@ public record Config
 
 public record RedditConfig
 {
-    public string ClientId { get; set; }
-    public string ClientSecret { get; set; }
-    public string RedirectUri { get; set; } = "http://localhost:8080/callback";
-    public string Username { get; set; }
-    public string Password { get; set; }
-    public string UserAgent { get; set; }
-    public string RefreshToken { get; set; }
-    public string AccessToken { get; set; }
-    public DateTime? AccessTokenExpiresUtc { get; set; }
+    public string Browser { get; set; } = "chromium";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string BrowserChannel { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string ExecutablePath { get; set; }
+
+    public bool Headless { get; set; } = true;
+
+    public string StorageStatePath { get; set; } = "reddit-state.json";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string UserDataDir { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string SessionCookie { get; set; }
+
+    public string Locale { get; set; } = "en-US";
+
+    public int NavigationTimeoutSeconds { get; set; } = 45;
+
     public int? DefaultLimit { get; set; } = 25;
+
+    public int MaxScrollPasses { get; set; } = 4;
+
+    public bool ExpandPostDetails { get; set; } = true;
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? SourceDelaySeconds { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MediaDelaySeconds { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string[] ExtraLaunchArgs { get; set; }
 }
 
 public record ConfigSource

@@ -9,3 +9,5 @@
 /Properties/PublishProfiles/FolderProfile.pubxml.user
 SimpleSyndicator.csproj.user
 /config.json
+/reddit-state.json
+/browser-profile/
