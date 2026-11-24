@@ -2,8 +2,10 @@ using GhostCursorSharp;
 using Microsoft.Playwright;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -93,6 +95,7 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 	private IBrowserContext _context;
 	private IPage _page;
 	private PlaywrightGhostCursor _cursor;
+	private HashSet<nint> _preLaunchBrowserWindowHandles;
 	private bool _persistedStorageStateExistsAtStart;
 	private bool _disposed;
 
@@ -453,6 +456,8 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 			page.SetDefaultNavigationTimeout(timeoutMs);
 			page.SetDefaultTimeout(timeoutMs);
 
+			await TryMaximizeBrowserWindowAsync(page, NormalizeBrowserName(_config.Browser), headless: false).ConfigureAwait(false);
+
 			var cursor = new PlaywrightGhostCursor(page, new GhostCursorOptions
 			{
 				Visible = true
@@ -520,6 +525,8 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 			var timeoutMs = GetTimeoutMs();
 			page.SetDefaultNavigationTimeout(timeoutMs);
 			page.SetDefaultTimeout(timeoutMs);
+
+			await TryMaximizeBrowserWindowAsync(page, NormalizeBrowserName(_config.Browser), headless: false).ConfigureAwait(false);
 
 			var cursor = new PlaywrightGhostCursor(page, new GhostCursorOptions
 			{
@@ -956,6 +963,9 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 			return (initialPost, true);
 		}
 
+		var postLabel = !string.IsNullOrWhiteSpace(expectedPostId) ? expectedPostId : (initialPost?.Id ?? page.Url);
+		await RevealSpoilerIfPresentAsync(page, cursor, expectedPostId, postLabel).ConfigureAwait(false);
+
 		if (sitOnPostPage)
 		{
 			var sitDelay = ComputeRandomDelay(2, 5);
@@ -966,8 +976,6 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 				await _delayAsync(sitDelay).ConfigureAwait(false);
 			}
 		}
-
-		var postLabel = !string.IsNullOrWhiteSpace(expectedPostId) ? expectedPostId : (initialPost?.Id ?? page.Url);
 		var galleryUrls = await CollectAndPageGalleryImagesAsync(
 			page,
 			cursor,
@@ -1247,6 +1255,30 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 		_playwright = null;
 	}
 
+	public static string[] BuildLaunchArgs(string browserName, bool headless, string[] extraArgs)
+	{
+		List<string> args = [];
+		if (extraArgs != null)
+		{
+			foreach (var arg in extraArgs)
+			{
+				if (!string.IsNullOrWhiteSpace(arg))
+				{
+					args.Add(arg.Trim());
+				}
+			}
+		}
+
+		if (!headless &&
+			string.Equals(browserName, "chromium", StringComparison.OrdinalIgnoreCase) &&
+			!args.Any(a => a.Equals("--start-maximized", StringComparison.OrdinalIgnoreCase)))
+		{
+			args.Add("--start-maximized");
+		}
+
+		return args.Count > 0 ? [.. args] : null;
+	}
+
 	private async Task<(IPage Page, PlaywrightGhostCursor Cursor)> EnsurePageAsync(bool forceHeadlessFalse = false)
 	{
 		var context = await EnsureContextAsync(forceHeadlessFalse).ConfigureAwait(false);
@@ -1255,14 +1287,18 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 			return (_page, _cursor);
 		}
 
+		var headless = !forceHeadlessFalse && _config.Headless;
+		var browserName = NormalizeBrowserName(_config.Browser);
 		var page = await context.NewPageAsync().ConfigureAwait(false);
 		var timeoutMs = GetTimeoutMs();
 		page.SetDefaultNavigationTimeout(timeoutMs);
 		page.SetDefaultTimeout(timeoutMs);
 
+		await TryMaximizeBrowserWindowAsync(page, browserName, headless).ConfigureAwait(false);
+
 		var cursor = new PlaywrightGhostCursor(page, new GhostCursorOptions
 		{
-			Visible = forceHeadlessFalse || !_config.Headless
+			Visible = !headless
 		});
 
 		page.Close += (_, _) =>
@@ -1277,6 +1313,253 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 		_page = page;
 		_cursor = cursor;
 		return (_page, _cursor);
+	}
+
+	private async Task TryMaximizeBrowserWindowAsync(IPage page, string browserName, bool headless)
+	{
+		if (headless || page == null || page.IsClosed)
+		{
+			return;
+		}
+
+		if (OperatingSystem.IsWindows())
+		{
+			var titleMarker = $"SimpleSyndicator-{Guid.NewGuid():N}";
+			try
+			{
+				await page.EvaluateAsync("(t) => { document.title = t; }", titleMarker).ConfigureAwait(false);
+			}
+			catch
+			{
+				titleMarker = string.Empty;
+			}
+
+			try
+			{
+				for (int attempt = 0; attempt < 15; attempt++)
+				{
+					var result = WindowsWindowMaximizer.TryMaximizeWindow(
+						titleMarker,
+						browserName,
+						_preLaunchBrowserWindowHandles,
+						allowProcessFallback: attempt >= 5);
+
+					if (result.Found)
+					{
+						if (result.Maximized)
+						{
+							Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Maximized browser window.");
+						}
+
+						return;
+					}
+
+					await _delayAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
+				}
+			}
+			finally
+			{
+				if (!string.IsNullOrEmpty(titleMarker) && !page.IsClosed)
+				{
+					try
+					{
+						await page.EvaluateAsync("(t) => { if (document.title === t) document.title = ''; }", titleMarker).ConfigureAwait(false);
+					}
+					catch
+					{
+						// Ignore cleanup failure
+					}
+				}
+			}
+
+			return;
+		}
+
+		try
+		{
+			await page.EvaluateAsync("() => { try { window.moveTo(0, 0); window.resizeTo(screen.availWidth, screen.availHeight); } catch {} }").ConfigureAwait(false);
+		}
+		catch
+		{
+			// Best-effort resize on non-Windows headed runs
+		}
+	}
+
+	private static class WindowsWindowMaximizer
+	{
+		private const int SwMaximize = 3;
+
+		private delegate bool EnumWindowsProc(nint hWnd, nint lParam);
+
+#pragma warning disable SYSLIB1054 // Managed EnumWindowsProc callback uses standard DllImport
+		[DllImport("user32.dll")]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, nint lParam);
+
+		[DllImport("user32.dll")]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		private static extern bool IsWindowVisible(nint hWnd);
+
+		[DllImport("user32.dll")]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		private static extern bool IsZoomed(nint hWnd);
+
+		[DllImport("user32.dll")]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		private static extern bool ShowWindow(nint hWnd, int nCmdShow);
+
+		[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+		private static extern int GetWindowTextLength(nint hWnd);
+
+		[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+		private static extern int GetWindowText(nint hWnd, [Out] char[] lpString, int nMaxCount);
+
+		[DllImport("user32.dll")]
+		private static extern uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
+#pragma warning restore SYSLIB1054
+
+		public static HashSet<nint> SnapshotBrowserWindowHandles()
+		{
+			HashSet<nint> handles = [];
+			try
+			{
+				EnumWindows((hWnd, _) =>
+				{
+					if (!IsWindowVisible(hWnd))
+					{
+						return true;
+					}
+
+					var procName = TryGetWindowProcessName(hWnd);
+					if (IsAnyBrowserProcess(procName))
+					{
+						handles.Add(hWnd);
+					}
+
+					return true;
+				}, 0);
+			}
+			catch
+			{
+				// Return partial snapshot cleanly
+			}
+
+			return handles;
+		}
+
+		public static (bool Found, bool Maximized) TryMaximizeWindow(
+			string titleMarker,
+			string browserName,
+			HashSet<nint> preLaunchHandles,
+			bool allowProcessFallback)
+		{
+			nint exactMatch = 0;
+			nint newBrowserWindow = 0;
+
+			try
+			{
+				EnumWindows((hWnd, _) =>
+				{
+					if (!IsWindowVisible(hWnd))
+					{
+						return true;
+					}
+
+					if (!string.IsNullOrEmpty(titleMarker))
+					{
+						var title = ReadWindowTitle(hWnd);
+						if (!string.IsNullOrEmpty(title) && title.Contains(titleMarker, StringComparison.Ordinal))
+						{
+							exactMatch = hWnd;
+							return false;
+						}
+					}
+
+					if (allowProcessFallback &&
+						newBrowserWindow == 0 &&
+						(preLaunchHandles == null || !preLaunchHandles.Contains(hWnd)))
+					{
+						var procName = TryGetWindowProcessName(hWnd);
+						if (IsExpectedBrowserProcess(procName, browserName))
+						{
+							newBrowserWindow = hWnd;
+						}
+					}
+
+					return true;
+				}, 0);
+			}
+			catch
+			{
+				return (false, false);
+			}
+
+			var target = exactMatch != 0 ? exactMatch : newBrowserWindow;
+			if (target == 0)
+			{
+				return (false, false);
+			}
+
+			if (IsZoomed(target))
+			{
+				return (true, false);
+			}
+
+			ShowWindow(target, SwMaximize);
+			return (true, true);
+		}
+
+		private static string ReadWindowTitle(nint hWnd)
+		{
+			var length = GetWindowTextLength(hWnd);
+			if (length <= 0)
+			{
+				return string.Empty;
+			}
+
+			var buffer = new char[length + 1];
+			var copied = GetWindowText(hWnd, buffer, buffer.Length);
+			return copied > 0 ? new string(buffer, 0, copied) : string.Empty;
+		}
+
+		private static string TryGetWindowProcessName(nint hWnd)
+		{
+			try
+			{
+				_ = GetWindowThreadProcessId(hWnd, out var pid);
+				if (pid == 0)
+				{
+					return string.Empty;
+				}
+
+				using var proc = Process.GetProcessById((int)pid);
+				return proc.ProcessName;
+			}
+			catch
+			{
+				return string.Empty;
+			}
+		}
+
+		private static bool IsAnyBrowserProcess(string processName)
+		{
+			return IsExpectedBrowserProcess(processName, "firefox") ||
+				   IsExpectedBrowserProcess(processName, "chromium");
+		}
+
+		private static bool IsExpectedBrowserProcess(string processName, string browserName)
+		{
+			if (string.IsNullOrWhiteSpace(processName))
+			{
+				return false;
+			}
+
+			return string.Equals(browserName, "firefox", StringComparison.OrdinalIgnoreCase)
+				? processName.Contains("firefox", StringComparison.OrdinalIgnoreCase)
+				: processName.Contains("chrome", StringComparison.OrdinalIgnoreCase) ||
+				  processName.Contains("chromium", StringComparison.OrdinalIgnoreCase) ||
+				  processName.Contains("msedge", StringComparison.OrdinalIgnoreCase);
+		}
 	}
 
 	private async Task<IBrowserContext> EnsureContextAsync(bool forceHeadlessFalse = false)
@@ -1296,9 +1579,15 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 
 			var headless = !forceHeadlessFalse && _config.Headless;
 			var locale = string.IsNullOrWhiteSpace(_config.Locale) ? "en-US" : _config.Locale.Trim();
-			var args = _config.ExtraLaunchArgs is { Length: > 0 } ? _config.ExtraLaunchArgs : null;
+			var args = BuildLaunchArgs(browserName, headless, _config.ExtraLaunchArgs);
 			var channel = string.IsNullOrWhiteSpace(_config.BrowserChannel) ? null : _config.BrowserChannel.Trim();
 			var executablePath = string.IsNullOrWhiteSpace(_config.ExecutablePath) ? null : _config.ExecutablePath.Trim();
+			var viewportSize = headless ? new ViewportSize { Width = 1440, Height = 900 } : ViewportSize.NoViewport;
+
+			if (!headless && OperatingSystem.IsWindows())
+			{
+				_preLaunchBrowserWindowHandles = WindowsWindowMaximizer.SnapshotBrowserWindowHandles();
+			}
 
 			if (!string.IsNullOrWhiteSpace(_config.UserDataDir))
 			{
@@ -1312,7 +1601,7 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 					ExecutablePath = executablePath,
 					Args = args,
 					Locale = locale,
-					ViewportSize = new ViewportSize { Width = 1440, Height = 900 }
+					ViewportSize = viewportSize
 				}).ConfigureAwait(false);
 
 				Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Using persistent browser profile directory '{userDataDir}'.");
@@ -1334,7 +1623,7 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 				{
 					StorageStatePath = _persistedStorageStateExistsAtStart ? statePath : null,
 					Locale = locale,
-					ViewportSize = new ViewportSize { Width = 1440, Height = 900 }
+					ViewportSize = viewportSize
 				}).ConfigureAwait(false);
 
 				if (_persistedStorageStateExistsAtStart)
@@ -1411,6 +1700,104 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 		public bool Found { get; init; }
 		public double X { get; init; }
 		public double Y { get; init; }
+	}
+
+	private sealed record SpoilerOverlayInfo
+	{
+		public bool Found { get; init; }
+		public double X { get; init; }
+		public double Y { get; init; }
+		public string Label { get; init; } = string.Empty;
+	}
+
+	private async Task RevealSpoilerIfPresentAsync(
+		IPage page,
+		PlaywrightGhostCursor cursor,
+		string expectedPostId,
+		string postLabel)
+	{
+		for (int attempt = 0; attempt < 2; attempt++)
+		{
+			SpoilerOverlayInfo info;
+			try
+			{
+				var json = await page.EvaluateAsync<string>(
+					FindSpoilerOverlayScript,
+					new { postId = expectedPostId ?? string.Empty }).ConfigureAwait(false);
+
+				info = string.IsNullOrWhiteSpace(json)
+					? null
+					: JsonSerializer.Deserialize<SpoilerOverlayInfo>(json, _jsonOptions);
+			}
+			catch (PlaywrightException)
+			{
+				return;
+			}
+
+			if (info is not { Found: true })
+			{
+				return;
+			}
+
+			var labelText = string.IsNullOrWhiteSpace(info.Label) ? "spoiler overlay" : info.Label;
+			Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Clicking spoiler overlay on post '{postLabel}' ({labelText}) to reveal image...");
+
+			try
+			{
+				await cursor.MoveToAsync(
+					new GhostCursorSharp.Vector(info.X, info.Y),
+					new MoveToOptions { MoveSpeed = 35 }).ConfigureAwait(false);
+			}
+			catch
+			{
+				// Continue to click even if GhostCursor movement fails
+			}
+
+			await _delayAsync(TimeSpan.FromMilliseconds(Random.Shared.Next(120, 250))).ConfigureAwait(false);
+			await page.Mouse.ClickAsync((float)info.X, (float)info.Y).ConfigureAwait(false);
+			await _delayAsync(TimeSpan.FromMilliseconds(450)).ConfigureAwait(false);
+
+			try
+			{
+				var recheckJson = await page.EvaluateAsync<string>(
+					FindSpoilerOverlayScript,
+					new { postId = expectedPostId ?? string.Empty }).ConfigureAwait(false);
+				var remaining = string.IsNullOrWhiteSpace(recheckJson)
+					? null
+					: JsonSerializer.Deserialize<SpoilerOverlayInfo>(recheckJson, _jsonOptions);
+
+				if (remaining is not { Found: true })
+				{
+					Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Revealed spoiler media on post '{postLabel}'.");
+					return;
+				}
+
+				var domClicked = await page.EvaluateAsync<bool>(
+					ClickSpoilerOverlayScript,
+					new { postId = expectedPostId ?? string.Empty }).ConfigureAwait(false);
+
+				if (domClicked)
+				{
+					await _delayAsync(TimeSpan.FromMilliseconds(400)).ConfigureAwait(false);
+					var finalJson = await page.EvaluateAsync<string>(
+						FindSpoilerOverlayScript,
+						new { postId = expectedPostId ?? string.Empty }).ConfigureAwait(false);
+					var finalRemaining = string.IsNullOrWhiteSpace(finalJson)
+						? null
+						: JsonSerializer.Deserialize<SpoilerOverlayInfo>(finalJson, _jsonOptions);
+
+					if (finalRemaining is not { Found: true })
+					{
+						Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Revealed spoiler media on post '{postLabel}'.");
+						return;
+					}
+				}
+			}
+			catch (PlaywrightException)
+			{
+				return;
+			}
+		}
 	}
 
 	private sealed record GalleryCarouselState
@@ -1795,6 +2182,172 @@ public sealed class RedditBrowserClient : IAsyncDisposable
                 hasPosts: hasPosts,
                 hasCaptchaOrChallengeElement: hasCaptchaOrChallenge
             });
+        }
+        """;
+
+	private const string SharedSpoilerOverlayJs = """
+            const cleanId = ((arg && arg.postId) || '').replace(/^t3_/i, '').toLowerCase();
+
+            function findPrimaryPostRoot() {
+                const posts = Array.from(document.querySelectorAll('shreddit-post'));
+                if (cleanId) {
+                    const matched = posts.find(el => {
+                        const attrs = [
+                            el.getAttribute('id') || '',
+                            el.getAttribute('thing-id') || '',
+                            el.getAttribute('post-id') || '',
+                            el.getAttribute('permalink') || ''
+                        ].join(' ').toLowerCase();
+                        return attrs.includes(cleanId);
+                    });
+                    if (matched) return matched;
+                }
+                return posts[0] || document.querySelector('div.thing.link, [data-test-id="post-content"]');
+            }
+
+            function isElementClickableVisible(el) {
+                if (!el) return false;
+                if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+                if (el.closest('[hidden], [aria-hidden="true"]')) return false;
+                const style = window.getComputedStyle(el);
+                if (!style || style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none' || parseFloat(style.opacity || '1') <= 0.05) {
+                    return false;
+                }
+                const rect = el.getBoundingClientRect();
+                return rect.width > 12 && rect.height > 12;
+            }
+
+            function isSpoilerRevealText(text) {
+                if (!text) return false;
+                const clean = text.replace(/\s+/g, ' ').trim().toLowerCase();
+                return clean.includes('view spoiler') ||
+                       clean.includes('click to see spoiler') ||
+                       clean.includes('click to view spoiler') ||
+                       clean.includes('show spoiler') ||
+                       clean.includes('reveal spoiler');
+            }
+
+            function walkOverlayDeep(root, visitor, visited = new Set()) {
+                if (!root || visited.has(root)) return;
+                visited.add(root);
+                if (root.tagName === 'SHREDDIT-COMMENT' ||
+                    (root.classList && root.classList.contains('commentarea')) ||
+                    root.getAttribute?.('slot') === 'comment' ||
+                    (root.tagName === 'SPAN' && root.classList?.contains('md-spoiler-text'))) {
+                    return;
+                }
+                visitor(root);
+                if (root.shadowRoot) {
+                    walkOverlayDeep(root.shadowRoot, visitor, visited);
+                }
+                const children = root.children;
+                if (children) {
+                    for (const child of children) {
+                        walkOverlayDeep(child, visitor, visited);
+                    }
+                }
+            }
+
+            function findButtonInBlurredContainer(container, requireSpoilerHint) {
+                let preferredBtn = null;
+                let fallbackBtn = null;
+                walkOverlayDeep(container, (node) => {
+                    if (node.getAttribute?.('slot') === 'revealed') return;
+                    const tag = (node.tagName || '').toUpperCase();
+                    if (tag === 'BUTTON' || node.getAttribute?.('role') === 'button') {
+                        if (!isElementClickableVisible(node)) return;
+                        const label = ((node.getAttribute('aria-label') || '') + ' ' + (node.textContent || '')).replace(/\s+/g, ' ').trim().toLowerCase();
+                        if (isSpoilerRevealText(label) || (requireSpoilerHint && (label.includes('view') || label.includes('show') || label.includes('see')))) {
+                            if (!preferredBtn) preferredBtn = node;
+                        } else if (!fallbackBtn) {
+                            fallbackBtn = node;
+                        }
+                    }
+                });
+                return preferredBtn || fallbackBtn;
+            }
+
+            function findSpoilerTarget() {
+                const postRoot = findPrimaryPostRoot();
+                if (!postRoot) return null;
+
+                let explicitButton = null;
+                let blurredCandidate = null;
+                const postHasSpoilerAttr = postRoot.hasAttribute('spoiler') || postRoot.getAttribute('is-spoiler') === 'true';
+
+                walkOverlayDeep(postRoot, (node) => {
+                    if (explicitButton) return;
+                    const tag = (node.tagName || '').toUpperCase();
+
+                    if (tag === 'SHREDDIT-BLURRED-CONTAINER') {
+                        const revealedAttr = node.getAttribute('is-revealed') ?? node.getAttribute('revealed');
+                        if (node.hasAttribute('is-revealed') && revealedAttr !== 'false') return;
+                        if (node.hasAttribute('revealed') && revealedAttr !== 'false') return;
+                        if (!isElementClickableVisible(node)) return;
+
+                        const reason = (node.getAttribute('reason') || '').toLowerCase();
+                        const innerText = (node.textContent || '').toLowerCase();
+                        const hasSpoilerSignal = reason.includes('spoiler') ||
+                                                 innerText.includes('spoiler') ||
+                                                 (postHasSpoilerAttr && (innerText.includes('view') || innerText.includes('click to see')));
+
+                        const innerBtn = findButtonInBlurredContainer(node, hasSpoilerSignal);
+                        if (innerBtn) {
+                            blurredCandidate = {
+                                element: innerBtn,
+                                label: (innerBtn.textContent || innerBtn.getAttribute('aria-label') || 'View spoiler').replace(/\s+/g, ' ').trim()
+                            };
+                        } else if (hasSpoilerSignal) {
+                            blurredCandidate = {
+                                element: node,
+                                label: 'Blurred spoiler container'
+                            };
+                        }
+                        return;
+                    }
+
+                    if (tag === 'BUTTON' || node.getAttribute?.('role') === 'button') {
+                        if (!isElementClickableVisible(node)) return;
+                        const label = ((node.getAttribute('aria-label') || '') + ' ' + (node.textContent || '')).replace(/\s+/g, ' ').trim();
+                        if (isSpoilerRevealText(label)) {
+                            explicitButton = { element: node, label };
+                        }
+                    }
+                });
+
+                return explicitButton || blurredCandidate;
+            }
+        """;
+
+	private const string FindSpoilerOverlayScript = "(arg) => {\n" + SharedSpoilerOverlayJs + "\n" + """
+            const target = findSpoilerTarget();
+            if (!target || !target.element) {
+                return JSON.stringify({ found: false, x: 0, y: 0, label: '' });
+            }
+
+            target.element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+            const rect = target.element.getBoundingClientRect();
+            const visible = rect.width > 8 && rect.height > 8 &&
+                rect.bottom > 0 && rect.top < window.innerHeight &&
+                rect.right > 0 && rect.left < window.innerWidth;
+
+            return JSON.stringify({
+                found: visible,
+                x: rect.left + (rect.width * 0.5),
+                y: rect.top + (rect.height * 0.5),
+                label: target.label || 'View spoiler'
+            });
+        }
+        """;
+
+	private const string ClickSpoilerOverlayScript = "(arg) => {\n" + SharedSpoilerOverlayJs + "\n" + """
+            const target = findSpoilerTarget();
+            if (!target || !target.element) {
+                return false;
+            }
+            target.element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+            target.element.click();
+            return true;
         }
         """;
 

@@ -14,11 +14,7 @@ namespace SimpleSyndicator;
 
 static class SimpleSyndicator
 {
-    private static readonly JsonSerializerOptions _jsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true
-    };
+    private static readonly JsonSerializerOptions _jsonOptions = Config.JsonOptions;
 
     private static string GetConfigPath() => Path.Combine(Directory.GetCurrentDirectory(), "config.json");
 

@@ -1,11 +1,20 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace SimpleSyndicator;
 
 public record Config
 {
+    public static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
     public List<ConfigSource> Sources { get; set; }
     public RedditConfig Reddit { get; set; }
     public string TelegramKey { get; set; }
