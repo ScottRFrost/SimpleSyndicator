@@ -58,7 +58,8 @@ public class RedditSource : BaseSource, IAsyncDisposable
         ConfigSource source,
         ISet<string> alreadySyndicatedUrls = null,
         ISet<string> alreadySyndicatedDescriptions = null,
-        Func<SyndicatorContent, Task> onSyndicateItemAsync = null)
+        Func<SyndicatorContent, Task> onSyndicateItemAsync = null,
+        ISet<string> alreadySyndicatedImageUrls = null)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -102,7 +103,7 @@ public class RedditSource : BaseSource, IAsyncDisposable
                 source.URL,
                 effectiveLimit,
                 stopBeforeFullname,
-                shouldSkipPost: post => IsPostAlreadySyndicated(post, alreadySyndicatedUrls, alreadySyndicatedDescriptions),
+                shouldSkipPost: post => IsPostAlreadySyndicated(post, alreadySyndicatedUrls, alreadySyndicatedDescriptions, alreadySyndicatedImageUrls),
                 onPostVisitedAsync: onPostVisited)
             .ConfigureAwait(false);
 
@@ -154,7 +155,7 @@ public class RedditSource : BaseSource, IAsyncDisposable
                 post.NeedsDetailPage &&
                 !string.IsNullOrWhiteSpace(post.Permalink))
             {
-                if (IsPostAlreadySyndicated(post, alreadySyndicatedUrls, alreadySyndicatedDescriptions))
+                if (IsPostAlreadySyndicated(post, alreadySyndicatedUrls, alreadySyndicatedDescriptions, alreadySyndicatedImageUrls))
                 {
                     Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Skipping already-syndicated post '{post.Title}' ({post.Fullname}).");
                     continue;
@@ -291,7 +292,8 @@ public class RedditSource : BaseSource, IAsyncDisposable
     public static bool IsPostAlreadySyndicated(
         RedditBrowserPost post,
         ISet<string> syndicatedUrls,
-        ISet<string> syndicatedDescriptions)
+        ISet<string> syndicatedDescriptions,
+        ISet<string> syndicatedImageUrls = null)
     {
         if (post == null || string.IsNullOrWhiteSpace(post.Id))
         {
@@ -305,6 +307,98 @@ public class RedditSource : BaseSource, IAsyncDisposable
             {
                 return true;
             }
+
+            var shortIdSegment = $"/{post.Id}";
+            var shortIdGalleryPrefix = $"/{post.Id}#";
+            var commentsIdSegment = $"/comments/{post.Id}";
+            foreach (var existingUrl in syndicatedUrls)
+            {
+                if (string.IsNullOrWhiteSpace(existingUrl))
+                {
+                    continue;
+                }
+
+                if (existingUrl.EndsWith(shortIdSegment, StringComparison.OrdinalIgnoreCase) ||
+                    existingUrl.Contains(shortIdGalleryPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    existingUrl.Contains(commentsIdSegment + "/", StringComparison.OrdinalIgnoreCase) ||
+                    existingUrl.EndsWith(commentsIdSegment, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (syndicatedImageUrls is { Count: > 0 } || syndicatedUrls is { Count: > 0 })
+        {
+            static IEnumerable<string> EnumeratePostCandidateMedia(RedditBrowserPost p)
+            {
+                if (!string.IsNullOrWhiteSpace(p.ContentHref))
+                {
+                    yield return p.ContentHref;
+                }
+
+                if (!string.IsNullOrWhiteSpace(p.ThumbnailUrl))
+                {
+                    yield return p.ThumbnailUrl;
+                }
+
+                if (p.MediaUrls != null)
+                {
+                    foreach (var u in p.MediaUrls)
+                    {
+                        if (!string.IsNullOrWhiteSpace(u))
+                        {
+                            yield return u;
+                        }
+                    }
+                }
+            }
+
+            foreach (var rawCandidate in EnumeratePostCandidateMedia(post))
+            {
+                var decoded = WebUtility.HtmlDecode(rawCandidate.Trim());
+                var highRes = GetHighResImageUrl(decoded);
+                var fileName = ExtractMediaFileName(highRes);
+
+                if (syndicatedImageUrls is { Count: > 0 })
+                {
+                    if ((!string.IsNullOrEmpty(decoded) && syndicatedImageUrls.Contains(decoded)) ||
+                        (!string.IsNullOrEmpty(highRes) && syndicatedImageUrls.Contains(highRes)) ||
+                        (!string.IsNullOrEmpty(fileName) && syndicatedImageUrls.Contains(fileName)))
+                    {
+                        return true;
+                    }
+
+                    if (!string.IsNullOrEmpty(fileName))
+                    {
+                        foreach (var existingImage in syndicatedImageUrls)
+                        {
+                            if (!string.IsNullOrEmpty(existingImage) &&
+                                string.Equals(ExtractMediaFileName(existingImage), fileName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                if (syndicatedUrls is { Count: > 0 } && !string.IsNullOrEmpty(fileName))
+                {
+                    if (syndicatedUrls.Contains(highRes) || syndicatedUrls.Contains(fileName))
+                    {
+                        return true;
+                    }
+
+                    foreach (var existingUrl in syndicatedUrls)
+                    {
+                        if (!string.IsNullOrEmpty(existingUrl) &&
+                            string.Equals(ExtractMediaFileName(existingUrl), fileName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
         }
 
         var decodedTitle = WebUtility.HtmlDecode(post.Title ?? string.Empty).Trim();
@@ -315,20 +409,53 @@ public class RedditSource : BaseSource, IAsyncDisposable
                 return true;
             }
 
-            var galleryPrefix = $"{decodedTitle} 1/";
             foreach (var description in syndicatedDescriptions)
             {
-                if (!string.IsNullOrEmpty(description) &&
-                    description.StartsWith(galleryPrefix, StringComparison.Ordinal) &&
-                    description.Length > galleryPrefix.Length &&
-                    int.TryParse(description[galleryPrefix.Length..], out _))
+                if (string.IsNullOrEmpty(description))
+                {
+                    continue;
+                }
+
+                if (string.Equals(description, decodedTitle, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
+                }
+
+                if (description.StartsWith(decodedTitle + " ", StringComparison.OrdinalIgnoreCase))
+                {
+                    var suffix = description[(decodedTitle.Length + 1)..];
+                    var slashIdx = suffix.IndexOf('/');
+                    if (slashIdx > 0 &&
+                        int.TryParse(suffix[..slashIdx], out _) &&
+                        int.TryParse(suffix[(slashIdx + 1)..], out _))
+                    {
+                        return true;
+                    }
                 }
             }
         }
 
         return false;
+    }
+
+    public static string ExtractMediaFileName(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return string.Empty;
+        }
+
+        var normalized = GetHighResImageUrl(WebUtility.HtmlDecode(url.Trim()));
+        var clean = normalized.Split('?', '#')[0];
+        if (!IsMediaUrl(clean))
+        {
+            return string.Empty;
+        }
+
+        var lastSlash = clean.LastIndexOf('/');
+        return lastSlash >= 0 && lastSlash + 1 < clean.Length
+            ? clean[(lastSlash + 1)..]
+            : clean;
     }
 
     public static bool IsMediaUrl(string url)

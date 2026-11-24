@@ -97,8 +97,46 @@ static class SimpleSyndicator
         var startingCount = config.SyndicatedURLs.Count;
         Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Read config.  {config.Sources.Count} sources, {startingCount} previously syndicated images.");
 
-        HashSet<string> syndicatedUrls = [with(StringComparer.Ordinal), .. config.SyndicatedURLs.Select(i => i.URL).Where(u => !string.IsNullOrEmpty(u))];
-        HashSet<string> syndicatedDescriptions = [with(StringComparer.Ordinal), .. config.SyndicatedURLs.Select(i => i.Description).Where(d => !string.IsNullOrEmpty(d))];
+        HashSet<string> syndicatedUrls = [with(StringComparer.OrdinalIgnoreCase), .. config.SyndicatedURLs.Select(i => i.URL).Where(u => !string.IsNullOrWhiteSpace(u))];
+        HashSet<string> syndicatedDescriptions = [with(StringComparer.OrdinalIgnoreCase), .. config.SyndicatedURLs.Select(i => i.Description).Where(d => !string.IsNullOrWhiteSpace(d))];
+        HashSet<string> syndicatedImageUrls = [with(StringComparer.OrdinalIgnoreCase)];
+
+        void TrackSyndicatedImage(string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                return;
+            }
+
+            var trimmed = candidate.Trim();
+            syndicatedImageUrls.Add(trimmed);
+
+            var highRes = RedditSource.GetHighResImageUrl(trimmed);
+            if (!string.IsNullOrWhiteSpace(highRes))
+            {
+                syndicatedImageUrls.Add(highRes);
+            }
+
+            var fileName = RedditSource.ExtractMediaFileName(trimmed);
+            if (!string.IsNullOrWhiteSpace(fileName))
+            {
+                syndicatedImageUrls.Add(fileName);
+            }
+        }
+
+        foreach (var entry in config.SyndicatedURLs)
+        {
+            TrackSyndicatedImage(entry.ImageURL);
+            if (RedditSource.IsMediaUrl(entry.URL))
+            {
+                TrackSyndicatedImage(entry.URL);
+            }
+        }
+
+        async Task SaveConfigAsync()
+        {
+            await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(config, _jsonOptions), System.Text.Encoding.UTF8).ConfigureAwait(false);
+        }
 
         // Telegram Setup
         var useTelegram = !string.IsNullOrWhiteSpace(config.TelegramKey);
@@ -116,9 +154,14 @@ static class SimpleSyndicator
 
         async Task SyndicateItemAsync(SyndicatorContent content)
         {
+            var highResImageUrl = RedditSource.GetHighResImageUrl(content.ImageURL);
+            var imageFileName = RedditSource.ExtractMediaFileName(content.ImageURL);
             var previouslySyndicated =
                 (!string.IsNullOrEmpty(content.LinkURL) && syndicatedUrls.Contains(content.LinkURL)) ||
-                (!string.IsNullOrEmpty(content.Description) && syndicatedDescriptions.Contains(content.Description));
+                (!string.IsNullOrEmpty(content.Description) && syndicatedDescriptions.Contains(content.Description)) ||
+                (!string.IsNullOrEmpty(content.ImageURL) && syndicatedImageUrls.Contains(content.ImageURL)) ||
+                (!string.IsNullOrEmpty(highResImageUrl) && syndicatedImageUrls.Contains(highResImageUrl)) ||
+                (!string.IsNullOrEmpty(imageFileName) && syndicatedImageUrls.Contains(imageFileName));
 
             if (previouslySyndicated)
             {
@@ -140,25 +183,6 @@ static class SimpleSyndicator
 
             // Write to Console
             Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Downloading media #{processedNewItems}: {content.Description} | {content.LinkURL} -- {content.ImageURL}");
-
-            // Save to config
-            config.SyndicatedURLs.Add(
-                new ConfigSyndicatedUrl
-                {
-                    Syndicated = DateTime.Now,
-                    URL = content.LinkURL,
-                    Description = content.Description
-                });
-
-            if (!string.IsNullOrEmpty(content.LinkURL))
-            {
-                syndicatedUrls.Add(content.LinkURL);
-            }
-
-            if (!string.IsNullOrEmpty(content.Description))
-            {
-                syndicatedDescriptions.Add(content.Description);
-            }
 
             // Download media via Playwright browser session first, falling back to SimpleHttpClient if needed
             var imageStream = new MemoryStream();
@@ -250,6 +274,29 @@ static class SimpleSyndicator
 
                 lastDownloadAt = DateTimeOffset.UtcNow;
 
+                // Record and immediately persist downloaded item so subsequent runs skip clicking it
+                config.SyndicatedURLs.Add(
+                    new ConfigSyndicatedUrl
+                    {
+                        Syndicated = DateTime.Now,
+                        URL = content.LinkURL,
+                        Description = content.Description,
+                        ImageURL = !string.IsNullOrEmpty(highResImageUrl) ? highResImageUrl : content.ImageURL
+                    });
+
+                if (!string.IsNullOrEmpty(content.LinkURL))
+                {
+                    syndicatedUrls.Add(content.LinkURL);
+                }
+
+                if (!string.IsNullOrEmpty(content.Description))
+                {
+                    syndicatedDescriptions.Add(content.Description);
+                }
+
+                TrackSyndicatedImage(content.ImageURL);
+                await SaveConfigAsync().ConfigureAwait(false);
+
                 // Check if image dimensions are too large for Telegram and resize if necessary
                 if (content.IsPhoto)
                 {
@@ -326,7 +373,8 @@ static class SimpleSyndicator
                             source,
                             syndicatedUrls,
                             syndicatedDescriptions,
-                            SyndicateItemAsync).ConfigureAwait(false));
+                            SyndicateItemAsync,
+                            syndicatedImageUrls).ConfigureAwait(false));
                     }
                 }
                 catch (RedditBrowserException ex) when (ex.ShouldAbortRun)
@@ -378,7 +426,7 @@ static class SimpleSyndicator
         config.SyndicatedURLs.RemoveAll(s => s.Syndicated < DateTime.Today.AddDays(-30));
 
         // Save Config
-        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(config, _jsonOptions), System.Text.Encoding.UTF8).ConfigureAwait(false);
+        await SaveConfigAsync().ConfigureAwait(false);
         Console.WriteLine($"{DateTime.Now:M/d HH:mm:ss} Wrote config.  {config.Sources.Count} sources, {startingCount} >> {config.SyndicatedURLs.Count} syndicated images.");
 
         return true;

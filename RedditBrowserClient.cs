@@ -632,6 +632,7 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 			}
 
 			var addedThisPass = 0;
+			var newDomPostsThisPass = 0;
 			foreach (var post in batch)
 			{
 				if (string.IsNullOrWhiteSpace(post.Id))
@@ -651,6 +652,8 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 				{
 					continue;
 				}
+
+				newDomPostsThisPass++;
 
 				if (IsPostOlderThan(post, maxAgeHours))
 				{
@@ -772,7 +775,7 @@ public sealed class RedditBrowserClient : IAsyncDisposable
 				break;
 			}
 
-			if (addedThisPass == 0)
+			if (newDomPostsThisPass == 0)
 			{
 				consecutiveEmptyPasses++;
 				if (consecutiveEmptyPasses >= 2)
